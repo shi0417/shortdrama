@@ -1,0 +1,13 @@
+{
+  "name": "shortdrama",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter web dev\" \"pnpm --filter api dev\"",
+    "build": "pnpm -r build",
+    "start": "pnpm -r start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
