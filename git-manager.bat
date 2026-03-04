@@ -91,12 +91,41 @@ if errorlevel 1 (
 echo.
 echo [OK] Push completed successfully.
 echo [OK] Branch: %BRANCH%
+echo [OK] Remote branch: origin/%BRANCH%
 echo [OK] Commit message: %COMMIT_MSG%
-timeout /t 3 >nul
+for /f %%i in ('git rev-parse --short HEAD 2^>nul') do set "LAST_COMMIT=%%i"
+for /f %%i in ('git status --short ^| find /c /v ""') do set "STATUS_COUNT=%%i"
+echo.
+echo ========================================
+echo Completed Task Checklist
+echo ========================================
+echo [1] Detected git repository
+echo [2] Detected current branch: %BRANCH%
+echo [3] Staged changes: git add -A
+echo [4] Auto commit message: %COMMIT_MSG%
+echo [5] Synced with remote: fetch/rebase (or first push)
+echo [6] Pushed to GitHub: OK
+echo [7] Latest commit: %LAST_COMMIT%
+echo [8] Pushed remote branch: origin/%BRANCH%
+if "%STATUS_COUNT%"=="0" (
+echo [9] git status --short: clean working tree
+) else (
+echo [9] git status --short: %STATUS_COUNT% line^(s^) pending
+echo ----- git status --short -----
+git status --short
+echo ------------------------------
+)
+echo ========================================
+echo.
+echo You can now review logs above and close this window manually.
+pause
 exit /b 0
 
 :fail
 echo.
 echo Push failed. Please check the error message above.
-timeout /t 8 >nul
+echo.
+echo Task stopped. Please fix the issue and rerun this script.
+echo You can close this window manually.
+pause
 exit /b 1
