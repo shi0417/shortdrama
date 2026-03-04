@@ -1,5 +1,11 @@
 @echo off
 setlocal
+
+if /i not "%~1"=="--run" (
+    cmd /k ""%~f0" --run"
+    exit /b
+)
+
 cd /d "%~dp0"
 
 set "REMOTE_URL=https://github.com/shi0417/shortdrama.git"
