@@ -64,7 +64,7 @@ function getToken(): string | null {
   return localStorage.getItem('accessToken')
 }
 
-async function apiClient(endpoint: string, options: RequestInit = {}) {
+export async function apiClient(endpoint: string, options: RequestInit = {}) {
   const token = getToken()
   const headers = new Headers(options.headers)
   headers.set('Content-Type', 'application/json')

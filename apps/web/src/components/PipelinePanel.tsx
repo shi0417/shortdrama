@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { api, PipelineOverviewDto } from '@/lib/api'
+import SkeletonTopicsPanel from './pipeline/SkeletonTopicsPanel'
 
 interface PipelinePanelProps {
   novelId: number
@@ -29,7 +30,6 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     timeline: false,
     characters: false,
     keyNodes: false,
-    skeletonTopics: false,
     explosions: false,
   })
 
@@ -47,7 +47,6 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [characters, setCharacters] = useState<Record<string, any>[]>([])
   const [keyNodes, setKeyNodes] = useState<Record<string, any>[]>([])
   const [explosions, setExplosions] = useState<Record<string, any>[]>([])
-  const [topics, setTopics] = useState<Array<Record<string, any> & { items: Record<string, any>[] }>>([])
   const [worldview, setWorldview] = useState<PipelineOverviewDto['worldview']>({
     core: [],
     payoffArch: [],
@@ -67,7 +66,6 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         setCharacters(data.characters || [])
         setKeyNodes(data.keyNodes || [])
         setExplosions(data.explosions || [])
-        setTopics(data.skeletonTopics || [])
         setWorldview(
           data.worldview || {
             core: [],
@@ -221,14 +219,10 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
               <input type="checkbox" checked={stepChecks.keyNodes} onChange={() => handleStepCheck('keyNodes')} /> 关键历史节点
               - 保存到 `novel_key_nodes`
             </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={stepChecks.skeletonTopics}
-                onChange={() => handleStepCheck('skeletonTopics')}
-              />{' '}
-              新增骨架分析主题 - 对应 `novel_skeleton_topics / novel_skeleton_topic_items`
-            </label>
+            <div style={{ marginLeft: '20px', marginTop: '4px' }}>
+              <div style={{ fontWeight: 600, marginBottom: '6px' }}>骨架分析主题（可配置）</div>
+              <SkeletonTopicsPanel novelId={novelId} />
+            </div>
             <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
               后端只读查询并展示已存在数据（本阶段不写库）
             </div>
@@ -245,8 +239,10 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
               {renderSimpleTable(keyNodes)}
             </div>
             <div style={{ marginTop: '10px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>骨架主题列表</div>
-              {renderSimpleTable(topics)}
+              <div style={{ fontWeight: 600, marginBottom: '6px' }}>骨架主题抽取结果（Topic Items）</div>
+              <div style={{ color: '#999', fontSize: '13px' }}>
+                请在上方“骨架分析主题（可配置）”中使用 Expand Items 查看各主题下的 items。
+              </div>
             </div>
           </div>
         )}
