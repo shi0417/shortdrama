@@ -2,10 +2,17 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Novel, Theme } from '@/types'
+import { api } from '@/lib/api'
+import ProjectList from '@/components/ProjectList'
+import ProjectDetail from '@/components/ProjectDetail'
 
 export default function ProjectsPage() {
   const router = useRouter()
   const [username, setUsername] = useState<string>('')
+  const [selectedNovel, setSelectedNovel] = useState<Novel | null>(null)
+  const [themes, setThemes] = useState<Theme[]>([])
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken')
@@ -21,65 +28,112 @@ export default function ProjectsPage() {
       console.error('Failed to parse token:', error)
       setUsername('User')
     }
+
+    loadThemes()
   }, [router])
+
+  const loadThemes = async () => {
+    try {
+      const data = await api.getThemes()
+      setThemes(data)
+    } catch (error: any) {
+      console.error('Failed to load themes:', error)
+    }
+  }
 
   const handleLogout = () => {
     localStorage.removeItem('accessToken')
     router.push('/login')
   }
 
+  const handleSelectNovel = (novel: Novel) => {
+    setSelectedNovel(novel)
+  }
+
+  const handleUpdate = async () => {
+    if (selectedNovel) {
+      try {
+        const updated = await api.getNovel(selectedNovel.id)
+        setSelectedNovel(updated)
+        setRefreshTrigger(prev => prev + 1)
+      } catch (error: any) {
+        console.error('Failed to refresh novel:', error)
+      }
+    }
+  }
+
+  const handleDelete = () => {
+    setSelectedNovel(null)
+    setRefreshTrigger(prev => prev + 1)
+  }
+
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: '#f5f5f5',
-    }}>
+    <div style={{ minHeight: '100vh', background: '#f5f5f5', display: 'flex', flexDirection: 'column' }}>
+      {/* Header */}
       <header style={{
         background: 'white',
-        padding: '20px 40px',
+        padding: '16px 24px',
         boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <h1 style={{ margin: 0, fontSize: '24px', color: '#333' }}>
-          短剧管理系统
+        <h1 style={{ margin: 0, fontSize: '20px', color: '#333' }}>
+          Short Drama Management System
         </h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          <span style={{ color: '#666' }}>欢迎, {username}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <span style={{ color: '#666', fontSize: '14px' }}>Welcome, {username}</span>
           <button
             onClick={handleLogout}
             style={{
-              padding: '8px 20px',
+              padding: '6px 16px',
               background: '#667eea',
               color: 'white',
               border: 'none',
-              borderRadius: '6px',
+              borderRadius: '4px',
               cursor: 'pointer',
               fontSize: '14px',
             }}
           >
-            退出登录
+            Logout
           </button>
         </div>
       </header>
-      <main style={{
-        padding: '40px',
-        maxWidth: '1200px',
-        margin: '0 auto',
-      }}>
-        <div style={{
-          background: 'white',
-          padding: '40px',
-          borderRadius: '12px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-          textAlign: 'center',
-        }}>
-          <h2 style={{ color: '#333', marginBottom: '20px' }}>项目列表</h2>
-          <p style={{ color: '#666', fontSize: '16px' }}>
-            登录成功！项目列表功能开发中...
-          </p>
+
+      {/* Main Content: Two Columns */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* Left Column: Project List */}
+        <div style={{ width: '320px', height: 'calc(100vh - 64px)' }}>
+          <ProjectList
+            onSelectNovel={handleSelectNovel}
+            selectedNovelId={selectedNovel?.id || null}
+            refreshTrigger={refreshTrigger}
+          />
         </div>
-      </main>
+
+        {/* Right Column: Project Detail */}
+        <div style={{ flex: 1, height: 'calc(100vh - 64px)', overflowY: 'auto' }}>
+          {selectedNovel ? (
+            <ProjectDetail
+              novel={selectedNovel}
+              themes={themes}
+              onUpdate={handleUpdate}
+              onDelete={handleDelete}
+            />
+          ) : (
+            <div style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#999',
+              fontSize: '16px',
+            }}>
+              Select a project to view details
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

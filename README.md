@@ -55,7 +55,29 @@ VALUES ('admin', '123456', '13800138000')
 ON DUPLICATE KEY UPDATE username=username;
 ```
 
-### 3. 配置环境变量
+### 3. 运行数据库迁移
+
+执行迁移脚本添加 theme_id 字段到 drama_novels 表：
+
+**Windows:**
+```bash
+mysql -uroot -p123456 duanju < apps/api/sql/20260302_add_theme_id.sql
+```
+
+**Linux/Mac:**
+```bash
+mysql -uroot -p123456 duanju < apps/api/sql/20260302_add_theme_id.sql
+```
+
+或者直接在 MySQL 客户端中执行：
+```sql
+USE duanju;
+SOURCE apps/api/sql/20260302_add_theme_id.sql;
+```
+
+此迁移脚本是幂等的，可以安全地多次执行。
+
+### 4. 配置环境变量
 
 **apps/api/.env** (已创建，检查配置)：
 ```env
@@ -79,7 +101,9 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
 # 1. 安装所有依赖
 pnpm install
 
-# 2. 启动开发服务器（前后端同时启动）
+# 2. 运行数据库迁移（见上方"运行数据库迁移"部分）
+
+# 3. 启动开发服务器（前后端同时启动）
 pnpm dev
 ```
 
@@ -117,12 +141,18 @@ curl -X POST http://localhost:4000/auth/login \
 }
 ```
 
-### 3. 测试前端登录
+### 3. 测试前端登录和项目管理
 
 1. 打开浏览器访问 http://localhost:3000/login
 2. 输入用户名 `admin`，密码 `123456`
 3. 点击登录
 4. 成功后自动跳转到 http://localhost:3000/projects
+5. 在项目页面可以：
+   - 创建新项目
+   - 搜索和筛选项目
+   - 编辑项目信息（包括关联题材）
+   - 管理参考资料（支持大文本分片加载）
+   - 删除项目
 
 ## 常见问题
 

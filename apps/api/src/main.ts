@@ -4,9 +4,11 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const apiPort = Number(process.env.API_PORT || process.env.PORT || 4000);
+  const webOrigin = process.env.WEB_ORIGIN || 'http://localhost:3000';
 
   app.enableCors({
-    origin: 'http://localhost:3000',
+    origin: [webOrigin, 'http://localhost:3001'],
     credentials: true,
   });
 
@@ -17,8 +19,8 @@ async function bootstrap() {
     }),
   );
 
-  const port = process.env.PORT || 4000;
-  await app.listen(port);
-  console.log(`🚀 API server running on http://localhost:${port}`);
+  await app.listen(apiPort);
+  console.log(`🚀 API server running on http://localhost:${apiPort}`);
+  console.log(`🔧 API_PORT=${process.env.API_PORT || 'undefined'} PORT=${process.env.PORT || 'undefined'}`);
 }
 bootstrap();
