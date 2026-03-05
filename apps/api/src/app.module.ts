@@ -10,6 +10,7 @@ import { SourceTextsModule } from './source-texts/source-texts.module';
 import { EpisodesModule } from './episodes/episodes.module';
 import { PipelineModule } from './pipeline/pipeline.module';
 import { SkeletonTopicsModule } from './skeleton-topics/skeleton-topics.module';
+import { AdaptationModule } from './adaptation/adaptation.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { SkeletonTopicsModule } from './skeleton-topics/skeleton-topics.module';
     EpisodesModule,
     PipelineModule,
     SkeletonTopicsModule,
+    AdaptationModule,
   ],
 })
 export class AppModule {}

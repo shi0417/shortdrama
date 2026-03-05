@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { api, PipelineOverviewDto } from '@/lib/api'
 import SkeletonTopicsPanel from './pipeline/SkeletonTopicsPanel'
+import AdaptationStrategyToolbar from './pipeline/AdaptationStrategyToolbar'
 
 interface PipelinePanelProps {
   novelId: number
@@ -286,19 +287,14 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
           style={{
             background: '#fafafa',
             padding: '12px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
             borderBottom: '1px solid #e8e8e8',
           }}
         >
-          <div style={{ fontWeight: 600 }}>Step 3 - 生成世界观架构 / 重构爽文模型</div>
-          <button
-            onClick={() => setStep3Expanded((prev) => !prev)}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#1890ff' }}
-          >
-            {step3Expanded ? 'Collapse' : 'Expand'}
-          </button>
+          <AdaptationStrategyToolbar
+            novelId={novelId}
+            step3Expanded={step3Expanded}
+            onToggle={() => setStep3Expanded((prev) => !prev)}
+          />
         </div>
         {step3Expanded && (
           <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
