@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { api, PipelineOverviewDto } from '@/lib/api'
 import SkeletonTopicsPanel from './pipeline/SkeletonTopicsPanel'
 import AdaptationStrategyToolbar from './pipeline/AdaptationStrategyToolbar'
+import SetCoreEditor from './pipeline/SetCoreEditor'
 
 interface PipelinePanelProps {
   novelId: number
@@ -26,6 +27,9 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [step2Expanded, setStep2Expanded] = useState(true)
   const [step3Expanded, setStep3Expanded] = useState(true)
   const [requireConfirm, setRequireConfirm] = useState(true)
+  const [expandedEditors, setExpandedEditors] = useState<Record<string, boolean>>({
+    set_core: false,
+  })
 
   const [stepChecks, setStepChecks] = useState({
     timeline: false,
@@ -95,6 +99,10 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     console.log({ module, action, novelId, novelName })
   }
 
+  const toggleEditor = (moduleKey: string) => {
+    setExpandedEditors((prev) => ({ ...prev, [moduleKey]: !prev[moduleKey] }))
+  }
+
   const handleInsertCharacters = () => {
     console.log({
       action: 'insert_novel_characters',
@@ -108,6 +116,17 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const handleAiGenerate = () => {
     console.log({
       action: 'local_generate_or_refine_preview',
+      novelId,
+      novelName,
+      coreSettingText,
+      coreFields,
+    })
+  }
+
+  const handleSetCoreSave = () => {
+    setExpandedEditors((prev) => ({ ...prev, set_core: true }))
+    console.log({
+      action: 'save_set_core_not_connected',
       novelId,
       novelName,
       coreSettingText,
@@ -299,42 +318,68 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         {step3Expanded && (
           <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {modules.map((item) => (
-              <div
-                key={item.key}
-                style={{
-                  border: '1px solid #f0f0f0',
-                  borderRadius: '6px',
-                  padding: '12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '12px',
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 600 }}>{item.title}</div>
-                  <div style={{ fontSize: '12px', color: '#666' }}>{item.mapping}</div>
+              <div key={item.key}>
+                <div
+                  style={{
+                    border: '1px solid #f0f0f0',
+                    borderRadius: '6px',
+                    padding: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{item.title}</div>
+                    <div style={{ fontSize: '12px', color: '#666' }}>{item.mapping}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => handleModuleAction(item.key, 'generate')}
+                      style={{ padding: '6px 12px', border: '1px solid #1890ff', background: 'white', color: '#1890ff', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                      生成(或刷新)
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (item.key === 'set_core') {
+                          toggleEditor('set_core')
+                          handleModuleAction(item.key, 'edit')
+                          return
+                        }
+                        handleModuleAction(item.key, 'edit')
+                      }}
+                      style={{ padding: '6px 12px', border: '1px solid #d9d9d9', background: 'white', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                      {item.key === 'set_core' && expandedEditors.set_core ? '收起' : '编辑'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (item.key === 'set_core') {
+                          handleSetCoreSave()
+                          return
+                        }
+                        handleModuleAction(item.key, 'save')
+                      }}
+                      style={{ padding: '6px 12px', border: 'none', background: '#1890ff', color: 'white', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                      保存
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    onClick={() => handleModuleAction(item.key, 'generate')}
-                    style={{ padding: '6px 12px', border: '1px solid #1890ff', background: 'white', color: '#1890ff', borderRadius: '4px', cursor: 'pointer' }}
-                  >
-                    生成(或刷新)
-                  </button>
-                  <button
-                    onClick={() => handleModuleAction(item.key, 'edit')}
-                    style={{ padding: '6px 12px', border: '1px solid #d9d9d9', background: 'white', borderRadius: '4px', cursor: 'pointer' }}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    onClick={() => handleModuleAction(item.key, 'save')}
-                    style={{ padding: '6px 12px', border: 'none', background: '#1890ff', color: 'white', borderRadius: '4px', cursor: 'pointer' }}
-                  >
-                    保存
-                  </button>
-                </div>
+                {item.key === 'set_core' && expandedEditors.set_core && (
+                  <SetCoreEditor
+                    coreSettingText={coreSettingText}
+                    setCoreSettingText={setCoreSettingText}
+                    coreFields={coreFields}
+                    setCoreFields={setCoreFields}
+                    onInsertCharacters={handleInsertCharacters}
+                    onGenerate={handleAiGenerate}
+                    onSave={handleSetCoreSave}
+                    onCollapse={() => toggleEditor('set_core')}
+                  />
+                )}
               </div>
             ))}
             <div style={{ marginTop: '6px' }}>
@@ -363,89 +408,6 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
             </div>
           </div>
         )}
-      </div>
-
-      <div style={{ border: '1px solid #e8e8e8', borderRadius: '8px', padding: '16px' }}>
-        <div style={{ fontWeight: 600, marginBottom: '12px' }}>核心设定</div>
-        <div style={{ display: 'flex', gap: '16px', alignItems: 'stretch' }}>
-          <textarea
-            value={coreSettingText}
-            onChange={(e) => setCoreSettingText(e.target.value)}
-            rows={12}
-            placeholder="在此填写核心设定内容（静态）..."
-            style={{
-              flex: 1,
-              padding: '10px 12px',
-              border: '1px solid #d9d9d9',
-              borderRadius: '4px',
-              fontFamily: 'inherit',
-              fontSize: '14px',
-              resize: 'vertical',
-            }}
-          />
-          <div style={{ width: '320px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <input
-              value={coreFields.protagonistName}
-              onChange={(e) => setCoreFields((prev) => ({ ...prev, protagonistName: e.target.value }))}
-              placeholder="主角名称"
-              style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
-            />
-            <input
-              value={coreFields.protagonistIdentity}
-              onChange={(e) => setCoreFields((prev) => ({ ...prev, protagonistIdentity: e.target.value }))}
-              placeholder="主角身份"
-              style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
-            />
-            <input
-              value={coreFields.historicalEvent}
-              onChange={(e) => setCoreFields((prev) => ({ ...prev, historicalEvent: e.target.value }))}
-              placeholder="历史事件"
-              style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
-            />
-            <input
-              value={coreFields.rewriteGoal}
-              onChange={(e) => setCoreFields((prev) => ({ ...prev, rewriteGoal: e.target.value }))}
-              placeholder="改写目标"
-              style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
-            />
-            <input
-              value={coreFields.coreConstraint}
-              onChange={(e) => setCoreFields((prev) => ({ ...prev, coreConstraint: e.target.value }))}
-              placeholder="核心限制"
-              style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
-            />
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <button
-                onClick={handleInsertCharacters}
-                style={{
-                  flex: 1,
-                  padding: '8px 10px',
-                  border: '1px solid #1890ff',
-                  background: 'white',
-                  color: '#1890ff',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              >
-                插入 novel_characters
-              </button>
-              <button
-                onClick={handleAiGenerate}
-                style={{
-                  flex: 1,
-                  padding: '8px 10px',
-                  border: 'none',
-                  background: '#1890ff',
-                  color: 'white',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              >
-                生成/完善（本地预览）
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
 
       <div style={{ border: '1px solid #e8e8e8', borderRadius: '8px', padding: '12px 16px' }}>
