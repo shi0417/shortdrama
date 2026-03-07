@@ -1,11 +1,13 @@
 'use client'
 
 import { Dispatch, SetStateAction } from 'react'
+import { SetCoreVersionDto } from '@/types/pipeline'
 
 type CoreFields = {
+  title: string
   protagonistName: string
   protagonistIdentity: string
-  historicalEvent: string
+  targetStory: string
   rewriteGoal: string
   coreConstraint: string
 }
@@ -15,8 +17,12 @@ interface SetCoreEditorProps {
   setCoreSettingText: Dispatch<SetStateAction<string>>
   coreFields: CoreFields
   setCoreFields: Dispatch<SetStateAction<CoreFields>>
+  versions: SetCoreVersionDto[]
+  activeVersionId: number | null
+  versionActionValue: string
+  onChangeVersionAction: (value: string) => void
   onInsertCharacters: () => void
-  onGenerate: () => void
+  onOpenEnhanceDialog: () => void
   onSave: () => void
   onCollapse: () => void
 }
@@ -26,8 +32,12 @@ export default function SetCoreEditor({
   setCoreSettingText,
   coreFields,
   setCoreFields,
+  versions,
+  activeVersionId,
+  versionActionValue,
+  onChangeVersionAction,
   onInsertCharacters,
-  onGenerate,
+  onOpenEnhanceDialog,
   onSave,
   onCollapse,
 }: SetCoreEditorProps) {
@@ -60,6 +70,12 @@ export default function SetCoreEditor({
         />
         <div style={{ width: '320px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <input
+            value={coreFields.title}
+            onChange={(e) => setCoreFields((prev) => ({ ...prev, title: e.target.value }))}
+            placeholder="标题 title"
+            style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
+          />
+          <input
             value={coreFields.protagonistName}
             onChange={(e) => setCoreFields((prev) => ({ ...prev, protagonistName: e.target.value }))}
             placeholder="主角名称"
@@ -72,9 +88,9 @@ export default function SetCoreEditor({
             style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
           />
           <input
-            value={coreFields.historicalEvent}
-            onChange={(e) => setCoreFields((prev) => ({ ...prev, historicalEvent: e.target.value }))}
-            placeholder="历史事件"
+            value={coreFields.targetStory}
+            onChange={(e) => setCoreFields((prev) => ({ ...prev, targetStory: e.target.value }))}
+            placeholder="目标故事（targetStory）"
             style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
           />
           <input
@@ -105,7 +121,7 @@ export default function SetCoreEditor({
               插入 novel_characters
             </button>
             <button
-              onClick={onGenerate}
+              onClick={onOpenEnhanceDialog}
               style={{
                 flex: 1,
                 padding: '8px 10px',
@@ -116,9 +132,24 @@ export default function SetCoreEditor({
                 cursor: 'pointer',
               }}
             >
-              生成/完善（本地预览）
+              生成/完善（AI）
             </button>
           </div>
+          <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>版本操作</div>
+          <select
+            value={versionActionValue}
+            onChange={(e) => onChangeVersionAction(e.target.value)}
+            style={{ padding: '8px 10px', border: '1px solid #d9d9d9', borderRadius: '4px' }}
+          >
+            <option value="action:new_version">新建版本</option>
+            {versions.map((item) => (
+              <option key={item.id} value={`version:${item.id}`}>
+                {`v${item.version} - ${item.title?.trim() ? item.title : '(无标题)'}${
+                  item.id === activeVersionId || item.isActive ? ' [active]' : ''
+                }`}
+              </option>
+            ))}
+          </select>
           <button
             onClick={onSave}
             style={{
@@ -131,7 +162,7 @@ export default function SetCoreEditor({
               cursor: 'pointer',
             }}
           >
-            保存 set_core（未接入保存接口）
+            保存 set_core
           </button>
         </div>
       </div>

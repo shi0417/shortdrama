@@ -11,6 +11,8 @@ import { EpisodesModule } from './episodes/episodes.module';
 import { PipelineModule } from './pipeline/pipeline.module';
 import { SkeletonTopicsModule } from './skeleton-topics/skeleton-topics.module';
 import { AdaptationModule } from './adaptation/adaptation.module';
+import { SetCoreModule } from './set-core/set-core.module';
+import { AiModelCatalogModule } from './ai-model-catalog/ai-model-catalog.module';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { AdaptationModule } from './adaptation/adaptation.module';
     PipelineModule,
     SkeletonTopicsModule,
     AdaptationModule,
+    SetCoreModule,
+    AiModelCatalogModule,
   ],
 })
 export class AppModule {}

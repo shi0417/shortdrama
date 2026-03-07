@@ -2,9 +2,17 @@
 
 import { useEffect, useState } from 'react'
 import { api, PipelineOverviewDto } from '@/lib/api'
+import { setCoreApi } from '@/lib/set-core-api'
+import {
+  AiModelOptionDto,
+  EnhanceSetCoreCurrentFields,
+  SetCoreVersionDto,
+  UpsertSetCorePayload,
+} from '@/types/pipeline'
 import SkeletonTopicsPanel from './pipeline/SkeletonTopicsPanel'
 import AdaptationStrategyToolbar from './pipeline/AdaptationStrategyToolbar'
 import SetCoreEditor from './pipeline/SetCoreEditor'
+import SetCoreEnhanceDialog from './pipeline/SetCoreEnhanceDialog'
 
 interface PipelinePanelProps {
   novelId: number
@@ -22,11 +30,23 @@ const modules = [
   { key: 'set_story_phases', title: '6 故事发展阶段', mapping: 'set_story_phases' },
 ]
 
+const defaultEnhanceReferenceTables = [
+  'drama_source_text',
+  'novel_characters',
+  'novel_key_nodes',
+  'novel_adaptation_strategy',
+  'adaptation_modes',
+]
+
 export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps) {
   const [step1Expanded, setStep1Expanded] = useState(true)
   const [step2Expanded, setStep2Expanded] = useState(true)
   const [step3Expanded, setStep3Expanded] = useState(true)
   const [requireConfirm, setRequireConfirm] = useState(true)
+  const [setCoreVersionActionValue, setSetCoreVersionActionValue] = useState('action:new_version')
+  const [setCoreVersions, setSetCoreVersions] = useState<SetCoreVersionDto[]>([])
+  const [activeSetCoreVersionId, setActiveSetCoreVersionId] = useState<number | null>(null)
+  const [setCoreLoadedSnapshot, setSetCoreLoadedSnapshot] = useState('')
   const [expandedEditors, setExpandedEditors] = useState<Record<string, boolean>>({
     set_core: false,
   })
@@ -40,9 +60,10 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
 
   const [coreSettingText, setCoreSettingText] = useState('')
   const [coreFields, setCoreFields] = useState({
+    title: '',
     protagonistName: '',
     protagonistIdentity: '',
-    historicalEvent: '',
+    targetStory: '',
     rewriteGoal: '',
     coreConstraint: '',
   })
@@ -60,34 +81,48 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     traitors: [],
     storyPhases: [],
   })
+  const [expandedDataLists, setExpandedDataLists] = useState<Record<string, boolean>>({
+    set_core: true,
+  })
+  const [setCoreEnhanceDialogOpen, setSetCoreEnhanceDialogOpen] = useState(false)
+  const [enhanceModels, setEnhanceModels] = useState<AiModelOptionDto[]>([])
+  const [enhanceLoading, setEnhanceLoading] = useState(false)
+  const [enhanceSubmitting, setEnhanceSubmitting] = useState(false)
+  const [enhanceReferenceTables, setEnhanceReferenceTables] = useState<string[]>(
+    defaultEnhanceReferenceTables
+  )
+  const [enhancePromptPreview, setEnhancePromptPreview] = useState('')
+  const [enhanceAllowPromptEdit, setEnhanceAllowPromptEdit] = useState(false)
+  const [enhanceUserInstruction, setEnhanceUserInstruction] = useState('')
+  const [enhanceSelectedModelKey, setEnhanceSelectedModelKey] = useState('')
+
+  const loadOverview = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const data = await api.getPipelineOverview(novelId)
+      setTimelines(data.timelines || [])
+      setCharacters(data.characters || [])
+      setKeyNodes(data.keyNodes || [])
+      setExplosions(data.explosions || [])
+      setWorldview(
+        data.worldview || {
+          core: [],
+          payoffArch: [],
+          opponents: [],
+          powerLadder: [],
+          traitors: [],
+          storyPhases: [],
+        }
+      )
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load pipeline overview')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    const loadOverview = async () => {
-      try {
-        setLoading(true)
-        setError(null)
-        const data = await api.getPipelineOverview(novelId)
-        setTimelines(data.timelines || [])
-        setCharacters(data.characters || [])
-        setKeyNodes(data.keyNodes || [])
-        setExplosions(data.explosions || [])
-        setWorldview(
-          data.worldview || {
-            core: [],
-            payoffArch: [],
-            opponents: [],
-            powerLadder: [],
-            traitors: [],
-            storyPhases: [],
-          }
-        )
-      } catch (err: any) {
-        setError(err?.message || 'Failed to load pipeline overview')
-      } finally {
-        setLoading(false)
-      }
-    }
-
     loadOverview()
   }, [novelId])
 
@@ -99,8 +134,80 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     console.log({ module, action, novelId, novelName })
   }
 
-  const toggleEditor = (moduleKey: string) => {
-    setExpandedEditors((prev) => ({ ...prev, [moduleKey]: !prev[moduleKey] }))
+  const fillSetCoreEditor = (row: {
+    title: string | null
+    coreText: string | null
+    protagonistName: string | null
+    protagonistIdentity: string | null
+    targetStory: string | null
+    rewriteGoal: string | null
+    constraintText: string | null
+  } | null) => {
+    if (!row) {
+      const emptyFields = {
+        title: '',
+        protagonistName: '',
+        protagonistIdentity: '',
+        targetStory: '',
+        rewriteGoal: '',
+        coreConstraint: '',
+      }
+      setCoreSettingText('')
+      setCoreFields(emptyFields)
+      setSetCoreLoadedSnapshot(JSON.stringify({ coreText: '', ...emptyFields }))
+      return
+    }
+
+    const nextText = row.coreText || ''
+    const nextFields = {
+      title: row.title || '',
+      protagonistName: row.protagonistName || '',
+      protagonistIdentity: row.protagonistIdentity || '',
+      targetStory: row.targetStory || '',
+      rewriteGoal: row.rewriteGoal || '',
+      coreConstraint: row.constraintText || '',
+    }
+
+    setCoreSettingText(nextText)
+    setCoreFields(nextFields)
+    setSetCoreLoadedSnapshot(JSON.stringify({ coreText: nextText, ...nextFields }))
+  }
+
+  const loadSetCoreEditorData = async () => {
+    const [activeSetCore, versions] = await Promise.all([
+      setCoreApi.getActiveSetCore(novelId),
+      setCoreApi.listSetCoreVersions(novelId),
+    ])
+
+    fillSetCoreEditor(activeSetCore)
+    setSetCoreVersions(versions || [])
+    const activeIdFromVersions = versions.find((v) => v.isActive === 1)?.id ?? null
+    const resolvedActiveId = activeSetCore?.id ?? activeIdFromVersions
+    setActiveSetCoreVersionId(resolvedActiveId)
+    setSetCoreVersionActionValue(
+      resolvedActiveId ? `version:${resolvedActiveId}` : 'action:new_version'
+    )
+  }
+
+  const hasUnsavedSetCoreChanges = () => {
+    const currentSnapshot = JSON.stringify({
+      coreText: coreSettingText,
+      ...coreFields,
+    })
+    return currentSnapshot !== setCoreLoadedSnapshot
+  }
+
+  const toggleEditor = async (moduleKey: string) => {
+    const shouldOpen = !expandedEditors[moduleKey]
+    setExpandedEditors((prev) => ({ ...prev, [moduleKey]: shouldOpen }))
+
+    if (moduleKey === 'set_core' && shouldOpen) {
+      try {
+        await loadSetCoreEditorData()
+      } catch (err: any) {
+        alert(err?.message || '加载 set_core 失败')
+      }
+    }
   }
 
   const handleInsertCharacters = () => {
@@ -113,25 +220,268 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     })
   }
 
-  const handleAiGenerate = () => {
-    console.log({
-      action: 'local_generate_or_refine_preview',
-      novelId,
-      novelName,
-      coreSettingText,
-      coreFields,
-    })
+  const getCurrentEnhanceFields = (): EnhanceSetCoreCurrentFields => {
+    return {
+      title: coreFields.title || undefined,
+      protagonistName: coreFields.protagonistName || undefined,
+      protagonistIdentity: coreFields.protagonistIdentity || undefined,
+      targetStory: coreFields.targetStory || undefined,
+      rewriteGoal: coreFields.rewriteGoal || undefined,
+      constraintText: coreFields.coreConstraint || undefined,
+    }
+  }
+
+  const loadEnhanceModels = async () => {
+    const models = await setCoreApi.listAiModelCatalogOptions()
+    setEnhanceModels(models || [])
+    return models || []
+  }
+
+  const refreshEnhancePromptPreview = async (modelKey?: string) => {
+    const resolvedModelKey = modelKey || enhanceSelectedModelKey
+    if (!resolvedModelKey) {
+      return
+    }
+
+    try {
+      setEnhanceLoading(true)
+      const preview = await setCoreApi.previewSetCoreEnhancePrompt(novelId, {
+        modelKey: resolvedModelKey,
+        referenceTables: enhanceReferenceTables,
+        currentCoreText: coreSettingText || undefined,
+        currentFields: getCurrentEnhanceFields(),
+        userInstruction: enhanceUserInstruction || undefined,
+      })
+      setEnhancePromptPreview(preview.promptPreview || '')
+      if (!enhanceSelectedModelKey && preview.usedModelKey) {
+        setEnhanceSelectedModelKey(preview.usedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '生成 prompt 预览失败')
+    } finally {
+      setEnhanceLoading(false)
+    }
+  }
+
+  const handleOpenEnhanceDialog = async () => {
+    try {
+      setSetCoreEnhanceDialogOpen(true)
+
+      let resolvedModelKey = enhanceSelectedModelKey
+      let models = enhanceModels
+      if (!models.length) {
+        models = await loadEnhanceModels()
+      }
+      if (!resolvedModelKey && models.length) {
+        resolvedModelKey = models[0].modelKey
+        setEnhanceSelectedModelKey(resolvedModelKey)
+      }
+
+      if (!enhanceReferenceTables.length) {
+        setEnhanceReferenceTables(defaultEnhanceReferenceTables)
+      }
+
+      if (resolvedModelKey) {
+        await refreshEnhancePromptPreview(resolvedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '打开 AI 完善弹窗失败')
+    }
+  }
+
+  const handleToggleEnhanceReferenceTable = (table: string) => {
+    setEnhanceReferenceTables((prev) =>
+      prev.includes(table) ? prev.filter((item) => item !== table) : [...prev, table]
+    )
+  }
+
+  const getSetCoreSaveMode = (): UpsertSetCorePayload['mode'] =>
+    setCoreVersionActionValue === 'action:new_version' ? 'new_version' : 'update_active'
+
+  const persistSetCorePayload = async (
+    payload: UpsertSetCorePayload,
+    buildSuccessMessage: (saved: { version: number }) => string
+  ) => {
+    const saved = await setCoreApi.upsertSetCore(novelId, payload)
+    fillSetCoreEditor(saved)
+    await refreshSetCoreStates()
+    await loadOverview()
+    setExpandedEditors((prev) => ({ ...prev, set_core: true }))
+    alert(buildSuccessMessage(saved))
+    return saved
+  }
+
+  const handleSubmitEnhance = async () => {
+    if (!enhanceSelectedModelKey) {
+      alert('请选择 AI 模型')
+      return
+    }
+
+    try {
+      setEnhanceSubmitting(true)
+      const result = await setCoreApi.enhanceSetCore(novelId, {
+        modelKey: enhanceSelectedModelKey,
+        referenceTables: enhanceReferenceTables,
+        currentCoreText: coreSettingText || undefined,
+        currentFields: getCurrentEnhanceFields(),
+        userInstruction: enhanceUserInstruction || undefined,
+        allowPromptEdit: enhanceAllowPromptEdit,
+        promptOverride:
+          enhanceAllowPromptEdit && enhancePromptPreview.trim()
+            ? enhancePromptPreview
+            : undefined,
+      })
+
+      const nextPayload: UpsertSetCorePayload = {
+        title: result.title || undefined,
+        coreText: result.coreText || undefined,
+        protagonistName: result.protagonistName || undefined,
+        protagonistIdentity: result.protagonistIdentity || undefined,
+        targetStory: result.targetStory || undefined,
+        rewriteGoal: result.rewriteGoal || undefined,
+        constraintText: result.constraintText || undefined,
+      }
+
+      setCoreSettingText(nextPayload.coreText || '')
+      setCoreFields({
+        title: nextPayload.title || '',
+        protagonistName: nextPayload.protagonistName || '',
+        protagonistIdentity: nextPayload.protagonistIdentity || '',
+        targetStory: nextPayload.targetStory || '',
+        rewriteGoal: nextPayload.rewriteGoal || '',
+        coreConstraint: nextPayload.constraintText || '',
+      })
+      setEnhancePromptPreview(result.promptPreview || enhancePromptPreview)
+
+      if (requireConfirm) {
+        setSetCoreEnhanceDialogOpen(false)
+        alert('AI 完善结果已回填，未自动保存，请检查后手动保存')
+        return
+      }
+
+      setSetCoreEnhanceDialogOpen(false)
+
+      try {
+        await persistSetCorePayload(
+          {
+            ...nextPayload,
+            mode: getSetCoreSaveMode(),
+          },
+          (saved) => `AI 完善结果已自动保存到 set_core（v${saved.version}）`
+        )
+      } catch (saveErr: any) {
+        alert(saveErr?.message || 'AI 结果已回填，但自动保存失败，请检查后手动保存')
+      }
+    } catch (err: any) {
+      alert(err?.message || 'AI 完善失败')
+    } finally {
+      setEnhanceSubmitting(false)
+    }
+  }
+
+  const refreshSetCoreStates = async () => {
+    const [activeSetCore, versions] = await Promise.all([
+      setCoreApi.getActiveSetCore(novelId),
+      setCoreApi.listSetCoreVersions(novelId),
+    ])
+
+    fillSetCoreEditor(activeSetCore)
+    setSetCoreVersions(versions || [])
+    const activeIdFromVersions = versions.find((v) => v.isActive === 1)?.id ?? null
+    const resolvedActiveId = activeSetCore?.id ?? activeIdFromVersions
+    setActiveSetCoreVersionId(resolvedActiveId)
+    setSetCoreVersionActionValue(
+      resolvedActiveId ? `version:${resolvedActiveId}` : 'action:new_version'
+    )
+  }
+
+  const handleChangeVersionAction = async (value: string) => {
+    if (value === 'action:new_version') {
+      setSetCoreVersionActionValue('action:new_version')
+      return
+    }
+
+    if (!value.startsWith('version:')) {
+      return
+    }
+
+    const versionId = Number(value.split(':')[1])
+    if (!Number.isInteger(versionId) || versionId <= 0) {
+      return
+    }
+    if (versionId === activeSetCoreVersionId) {
+      setSetCoreVersionActionValue(`version:${versionId}`)
+      return
+    }
+
+    if (hasUnsavedSetCoreChanges()) {
+      const shouldContinue = confirm('切换版本会覆盖当前编辑内容，是否继续？')
+      if (!shouldContinue) {
+        setSetCoreVersionActionValue(
+          activeSetCoreVersionId ? `version:${activeSetCoreVersionId}` : 'action:new_version'
+        )
+        return
+      }
+    }
+
+    try {
+      const activated = await setCoreApi.activateSetCoreVersion(versionId)
+      fillSetCoreEditor(activated)
+      await refreshSetCoreStates()
+      await loadOverview()
+      alert(`已切换到 v${activated.version}`)
+    } catch (err: any) {
+      setSetCoreVersionActionValue(
+        activeSetCoreVersionId ? `version:${activeSetCoreVersionId}` : 'action:new_version'
+      )
+      alert(err?.message || '切换 set_core 版本失败')
+    }
+  }
+
+  const handleDeleteSetCore = async (id: number) => {
+    const shouldDelete = confirm('确定删除该版本吗？')
+    if (!shouldDelete) {
+      return
+    }
+
+    try {
+      await setCoreApi.deleteSetCore(id)
+      await refreshSetCoreStates()
+      await loadOverview()
+      alert('set_core 版本删除成功')
+    } catch (err: any) {
+      alert(err?.message || '删除 set_core 版本失败')
+    }
+  }
+
+  const toggleSetCoreDataList = () => {
+    setExpandedDataLists((prev) => ({
+      ...prev,
+      set_core: !prev.set_core,
+    }))
   }
 
   const handleSetCoreSave = () => {
-    setExpandedEditors((prev) => ({ ...prev, set_core: true }))
-    console.log({
-      action: 'save_set_core_not_connected',
-      novelId,
-      novelName,
-      coreSettingText,
-      coreFields,
-    })
+    const save = async () => {
+      try {
+        const payload = {
+          title: coreFields.title || undefined,
+          coreText: coreSettingText || undefined,
+          protagonistName: coreFields.protagonistName || undefined,
+          protagonistIdentity: coreFields.protagonistIdentity || undefined,
+          targetStory: coreFields.targetStory || undefined,
+          rewriteGoal: coreFields.rewriteGoal || undefined,
+          constraintText: coreFields.coreConstraint || undefined,
+          mode: getSetCoreSaveMode(),
+        } satisfies UpsertSetCorePayload
+
+        await persistSetCorePayload(payload, (saved) => `set_core 保存成功（v${saved.version}）`)
+      } catch (err: any) {
+        alert(err?.message || 'set_core 保存失败')
+      }
+    }
+
+    save()
   }
 
   const extractTitle = (row: Record<string, any>): string => {
@@ -197,6 +547,83 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       </table>
     )
   }
+
+  const renderSetCoreTable = (rows: Record<string, any>[]) => {
+    if (!rows.length) {
+      return <div style={{ color: '#999', fontSize: '13px' }}>暂无数据</div>
+    }
+
+    return (
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #f0f0f0', padding: '8px' }}>
+              title
+            </th>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #f0f0f0', padding: '8px' }}>
+              description
+            </th>
+            <th style={{ textAlign: 'left', borderBottom: '1px solid #f0f0f0', padding: '8px', width: '96px' }}>
+              action
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={`${row.id ?? 'r'}-${idx}`}>
+              <td style={{ borderBottom: '1px solid #f7f7f7', padding: '8px', verticalAlign: 'top' }}>
+                {extractTitle(row)}
+              </td>
+              <td style={{ borderBottom: '1px solid #f7f7f7', padding: '8px', color: '#555' }}>
+                {extractDescription(row) || '-'}
+              </td>
+              <td style={{ borderBottom: '1px solid #f7f7f7', padding: '8px' }}>
+                <button
+                  onClick={() => void handleDeleteSetCore(Number(row.id))}
+                  style={{
+                    padding: '4px 10px',
+                    border: '1px solid #ff4d4f',
+                    color: '#ff4d4f',
+                    borderRadius: '4px',
+                    background: 'white',
+                    cursor: 'pointer',
+                  }}
+                  disabled={!row.id}
+                >
+                  删除
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )
+  }
+
+  const getModuleRows = (moduleKey: string): Record<string, any>[] => {
+    switch (moduleKey) {
+      case 'set_core':
+        return worldview.core
+      case 'set_payoff':
+        return worldview.payoffArch
+      case 'set_opponent':
+        return worldview.opponents
+      case 'set_power_ladder':
+        return worldview.powerLadder
+      case 'set_traitor':
+        return worldview.traitors
+      case 'set_story_phases':
+        return worldview.storyPhases
+      default:
+        return []
+    }
+  }
+
+  const enhanceSaveBehaviorDescription = requireConfirm
+    ? '当前模式：生成后只回填编辑器，未自动保存到 set_core。'
+    : `当前模式：生成后将自动保存到 set_core（${
+        getSetCoreSaveMode() === 'new_version' ? '新建版本' : '更新当前激活版本'
+      }），并刷新 Step3 数据。`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -335,6 +762,14 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
                     <div style={{ fontSize: '12px', color: '#666' }}>{item.mapping}</div>
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
+                    {item.key === 'set_core' && (
+                      <button
+                        onClick={toggleSetCoreDataList}
+                        style={{ padding: '6px 12px', border: '1px solid #d9d9d9', background: 'white', borderRadius: '4px', cursor: 'pointer' }}
+                      >
+                        {expandedDataLists.set_core ? '列表收起' : '列表展开'}
+                      </button>
+                    )}
                     <button
                       onClick={() => handleModuleAction(item.key, 'generate')}
                       style={{ padding: '6px 12px', border: '1px solid #1890ff', background: 'white', color: '#1890ff', borderRadius: '4px', cursor: 'pointer' }}
@@ -344,7 +779,7 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
                     <button
                       onClick={() => {
                         if (item.key === 'set_core') {
-                          toggleEditor('set_core')
+                          void toggleEditor('set_core')
                           handleModuleAction(item.key, 'edit')
                           return
                         }
@@ -374,38 +809,40 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
                     setCoreSettingText={setCoreSettingText}
                     coreFields={coreFields}
                     setCoreFields={setCoreFields}
+                    versions={setCoreVersions}
+                    activeVersionId={activeSetCoreVersionId}
+                    versionActionValue={setCoreVersionActionValue}
+                    onChangeVersionAction={handleChangeVersionAction}
                     onInsertCharacters={handleInsertCharacters}
-                    onGenerate={handleAiGenerate}
+                    onOpenEnhanceDialog={() => void handleOpenEnhanceDialog()}
                     onSave={handleSetCoreSave}
-                    onCollapse={() => toggleEditor('set_core')}
+                    onCollapse={() => void toggleEditor('set_core')}
                   />
+                )}
+                {item.key !== 'set_core' && (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      paddingLeft: '12px',
+                      borderLeft: '2px solid #f0f0f0',
+                    }}
+                  >
+                    {renderSimpleTable(getModuleRows(item.key))}
+                  </div>
+                )}
+                {item.key === 'set_core' && expandedDataLists.set_core && (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      paddingLeft: '12px',
+                      borderLeft: '2px solid #f0f0f0',
+                    }}
+                  >
+                    {renderSetCoreTable(getModuleRows('set_core'))}
+                  </div>
                 )}
               </div>
             ))}
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>核心设定</div>
-              {renderSimpleTable(worldview.core)}
-            </div>
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>爽点架构</div>
-              {renderSimpleTable(worldview.payoffArch)}
-            </div>
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>对手矩阵</div>
-              {renderSimpleTable(worldview.opponents)}
-            </div>
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>权力阶梯</div>
-              {renderSimpleTable(worldview.powerLadder)}
-            </div>
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>内鬼系统</div>
-              {renderSimpleTable(worldview.traitors)}
-            </div>
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>故事阶段</div>
-              {renderSimpleTable(worldview.storyPhases)}
-            </div>
           </div>
         )}
       </div>
@@ -419,6 +856,32 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
           勾选：先预览再落库（推荐） | 不勾选：自动落库（高级）
         </div>
       </div>
+
+      <SetCoreEnhanceDialog
+        open={setCoreEnhanceDialogOpen}
+        models={enhanceModels}
+        loading={enhanceLoading}
+        submitting={enhanceSubmitting}
+        saveBehaviorDescription={enhanceSaveBehaviorDescription}
+        selectedModelKey={enhanceSelectedModelKey}
+        userInstruction={enhanceUserInstruction}
+        referenceTables={enhanceReferenceTables}
+        allowPromptEdit={enhanceAllowPromptEdit}
+        promptPreview={enhancePromptPreview}
+        onClose={() => setSetCoreEnhanceDialogOpen(false)}
+        onChangeModelKey={(value) => {
+          setEnhanceSelectedModelKey(value)
+          if (!enhanceAllowPromptEdit && value) {
+            void refreshEnhancePromptPreview(value)
+          }
+        }}
+        onChangeUserInstruction={setEnhanceUserInstruction}
+        onToggleReferenceTable={handleToggleEnhanceReferenceTable}
+        onChangeAllowPromptEdit={setEnhanceAllowPromptEdit}
+        onChangePromptPreview={setEnhancePromptPreview}
+        onRefreshPromptPreview={() => void refreshEnhancePromptPreview()}
+        onSubmit={() => void handleSubmitEnhance()}
+      />
     </div>
   )
 }
