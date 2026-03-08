@@ -11,6 +11,7 @@ import {
 
 interface SkeletonTopicsPanelProps {
   novelId: number
+  refreshKey?: number
 }
 
 interface TopicFormState {
@@ -51,7 +52,7 @@ function trimPayload(payload: UpdateSkeletonTopicPayload): UpdateSkeletonTopicPa
   return next
 }
 
-export default function SkeletonTopicsPanel({ novelId }: SkeletonTopicsPanelProps) {
+export default function SkeletonTopicsPanel({ novelId, refreshKey = 0 }: SkeletonTopicsPanelProps) {
   const [topics, setTopics] = useState<SkeletonTopicDto[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -91,6 +92,25 @@ export default function SkeletonTopicsPanel({ novelId }: SkeletonTopicsPanelProp
   useEffect(() => {
     loadTopics()
   }, [novelId])
+
+  useEffect(() => {
+    const refresh = async () => {
+      await loadTopics()
+
+      const expandedTopicIds = Object.entries(expandedTopics)
+        .filter(([, expanded]) => expanded)
+        .map(([topicId]) => Number(topicId))
+        .filter((topicId) => Number.isInteger(topicId) && topicId > 0)
+
+      for (const topicId of expandedTopicIds) {
+        await loadItems(topicId)
+      }
+    }
+
+    if (refreshKey > 0) {
+      void refresh()
+    }
+  }, [refreshKey])
 
   const loadItems = async (topicId: number) => {
     try {

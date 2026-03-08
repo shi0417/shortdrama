@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react'
 import { api, PipelineOverviewDto } from '@/lib/api'
 import { setCoreApi } from '@/lib/set-core-api'
+import { pipelineAiApi } from '@/lib/pipeline-ai-api'
 import {
   AiModelOptionDto,
   EnhanceSetCoreCurrentFields,
+  PipelineExtractReferenceTable,
   SetCoreVersionDto,
   UpsertSetCorePayload,
 } from '@/types/pipeline'
@@ -13,6 +15,7 @@ import SkeletonTopicsPanel from './pipeline/SkeletonTopicsPanel'
 import AdaptationStrategyToolbar from './pipeline/AdaptationStrategyToolbar'
 import SetCoreEditor from './pipeline/SetCoreEditor'
 import SetCoreEnhanceDialog from './pipeline/SetCoreEnhanceDialog'
+import PipelineExtractDialog from './pipeline/PipelineExtractDialog'
 
 interface PipelinePanelProps {
   novelId: number
@@ -36,6 +39,14 @@ const defaultEnhanceReferenceTables = [
   'novel_key_nodes',
   'novel_adaptation_strategy',
   'adaptation_modes',
+]
+
+const defaultExtractReferenceTables: PipelineExtractReferenceTable[] = [
+  'drama_novels',
+  'drama_source_text',
+  'novel_adaptation_strategy',
+  'adaptation_modes',
+  'set_core',
 ]
 
 export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps) {
@@ -95,6 +106,18 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [enhanceAllowPromptEdit, setEnhanceAllowPromptEdit] = useState(false)
   const [enhanceUserInstruction, setEnhanceUserInstruction] = useState('')
   const [enhanceSelectedModelKey, setEnhanceSelectedModelKey] = useState('')
+  const [extractDialogOpen, setExtractDialogOpen] = useState(false)
+  const [extractModels, setExtractModels] = useState<AiModelOptionDto[]>([])
+  const [extractLoading, setExtractLoading] = useState(false)
+  const [extractSubmitting, setExtractSubmitting] = useState(false)
+  const [extractReferenceTables, setExtractReferenceTables] =
+    useState<PipelineExtractReferenceTable[]>(defaultExtractReferenceTables)
+  const [extractPromptPreview, setExtractPromptPreview] = useState('')
+  const [extractAllowPromptEdit, setExtractAllowPromptEdit] = useState(false)
+  const [extractUserInstruction, setExtractUserInstruction] = useState('')
+  const [extractSelectedModelKey, setExtractSelectedModelKey] = useState('')
+  const [extractFontSize, setExtractFontSize] = useState(14)
+  const [extractRefreshKey, setExtractRefreshKey] = useState(0)
 
   const loadOverview = async () => {
     try {
@@ -132,6 +155,122 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
 
   const handleModuleAction = (module: string, action: ModuleAction) => {
     console.log({ module, action, novelId, novelName })
+  }
+
+  const loadExtractModels = async () => {
+    const models = await pipelineAiApi.listAiModelOptions()
+    setExtractModels(models || [])
+    return models || []
+  }
+
+  const refreshExtractPromptPreview = async (modelKey?: string) => {
+    const resolvedModelKey = modelKey || extractSelectedModelKey
+    if (!resolvedModelKey) {
+      return
+    }
+
+    try {
+      setExtractLoading(true)
+      const preview = await pipelineAiApi.previewExtractPrompt(novelId, {
+        modelKey: resolvedModelKey,
+        referenceTables: extractReferenceTables,
+        userInstruction: extractUserInstruction || undefined,
+        allowPromptEdit: extractAllowPromptEdit,
+        promptOverride:
+          extractAllowPromptEdit && extractPromptPreview.trim()
+            ? extractPromptPreview
+            : undefined,
+      })
+      setExtractPromptPreview(preview.promptPreview || '')
+      if (!extractSelectedModelKey && preview.usedModelKey) {
+        setExtractSelectedModelKey(preview.usedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '生成预处理 prompt 预览失败')
+    } finally {
+      setExtractLoading(false)
+    }
+  }
+
+  const handleOpenExtractDialog = async () => {
+    try {
+      setExtractDialogOpen(true)
+
+      let resolvedModelKey = extractSelectedModelKey
+      let models = extractModels
+      if (!models.length) {
+        models = await loadExtractModels()
+      }
+      if (!resolvedModelKey && models.length) {
+        resolvedModelKey = models[0].modelKey
+        setExtractSelectedModelKey(resolvedModelKey)
+      }
+
+      if (!extractReferenceTables.length) {
+        setExtractReferenceTables(defaultExtractReferenceTables)
+      }
+
+      if (resolvedModelKey) {
+        await refreshExtractPromptPreview(resolvedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '打开预处理 AI 弹窗失败')
+    }
+  }
+
+  const handleToggleExtractReferenceTable = (table: PipelineExtractReferenceTable) => {
+    setExtractReferenceTables((prev) =>
+      prev.includes(table) ? prev.filter((item) => item !== table) : [...prev, table]
+    )
+  }
+
+  const handleSubmitExtract = async () => {
+    if (!extractSelectedModelKey) {
+      alert('请选择 AI 模型')
+      return
+    }
+
+    try {
+      setExtractSubmitting(true)
+      const result = await pipelineAiApi.extractAndGenerate(novelId, {
+        modelKey: extractSelectedModelKey,
+        referenceTables: extractReferenceTables,
+        userInstruction: extractUserInstruction || undefined,
+        allowPromptEdit: extractAllowPromptEdit,
+        promptOverride:
+          extractAllowPromptEdit && extractPromptPreview.trim()
+            ? extractPromptPreview
+            : undefined,
+      })
+
+      await loadOverview()
+      setExtractRefreshKey((prev) => prev + 1)
+      setExtractDialogOpen(false)
+
+      const summary = result.summary
+      const detailsText = result.details
+        ? `\n\n调试信息：\n启用主题数：${result.details.enabledTopicCount}\n启用 topicKeys：${
+            result.details.enabledTopicKeys.join(', ') || '(none)'
+          }\n标准化后数组：timelines=${result.details.normalizedCounts.timelines}, characters=${result.details.normalizedCounts.characters}, keyNodes=${result.details.normalizedCounts.keyNodes}, skeletonTopicItems=${result.details.normalizedCounts.skeletonTopicItems}, explosions=${result.details.normalizedCounts.explosions}\n骨架主题项：requestedGroups=${result.details.skeletonTopicItemsRequestedGroups}, requestedItems=${result.details.skeletonTopicItemsRequestedItems}, inserted=${result.details.skeletonTopicItemsInserted}, dropped=${result.details.skeletonTopicItemsDropped}`
+        : ''
+      const warningText = result.warnings?.length
+        ? `\n\nwarnings:\n- ${result.warnings.join('\n- ')}`
+        : ''
+
+      alert(
+        `生成并写入成功\n时间线：${summary.timelines}\n人物：${summary.characters}\n关键节点：${summary.keyNodes}\n骨架主题内容：${summary.skeletonTopicItems}\n爆点：${summary.explosions}${warningText}${detailsText}`
+      )
+    } catch (err: any) {
+      alert(
+        err?.message || '生成并写入失败，后端未返回明确错误信息。请检查服务端日志。'
+      )
+    } finally {
+      setExtractSubmitting(false)
+    }
+  }
+
+  const handlePreStep3Action = () => {
+    void handleOpenExtractDialog()
   }
 
   const fillSetCoreEditor = (row: {
@@ -668,7 +807,7 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
             </label>
             <div style={{ marginLeft: '20px', marginTop: '4px' }}>
               <div style={{ fontWeight: 600, marginBottom: '6px' }}>骨架分析主题（可配置）</div>
-              <SkeletonTopicsPanel novelId={novelId} />
+              <SkeletonTopicsPanel novelId={novelId} refreshKey={extractRefreshKey} />
             </div>
             <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
               后端只读查询并展示已存在数据（本阶段不写库）
@@ -726,6 +865,41 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
             </div>
           </div>
         )}
+      </div>
+
+      <div
+        style={{
+          border: '1px solid #e8e8e8',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          background: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ fontWeight: 600, color: '#333' }}>预处理操作</div>
+          <div style={{ fontSize: '12px', color: '#666' }}>
+            在生成世界观前，先执行历史骨架抽取与爆点生成。
+          </div>
+        </div>
+        <button
+          onClick={handlePreStep3Action}
+          style={{
+            padding: '6px 12px',
+            border: 'none',
+            borderRadius: '4px',
+            background: '#1890ff',
+            color: '#fff',
+            cursor: 'pointer',
+            fontSize: '13px',
+          }}
+        >
+          抽取历史骨架和生成爆点
+        </button>
       </div>
 
       <div style={{ border: '1px solid #e8e8e8', borderRadius: '8px', overflow: 'hidden' }}>
@@ -881,6 +1055,33 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         onChangePromptPreview={setEnhancePromptPreview}
         onRefreshPromptPreview={() => void refreshEnhancePromptPreview()}
         onSubmit={() => void handleSubmitEnhance()}
+      />
+
+      <PipelineExtractDialog
+        open={extractDialogOpen}
+        models={extractModels}
+        loading={extractLoading}
+        submitting={extractSubmitting}
+        selectedModelKey={extractSelectedModelKey}
+        userInstruction={extractUserInstruction}
+        referenceTables={extractReferenceTables}
+        allowPromptEdit={extractAllowPromptEdit}
+        promptPreview={extractPromptPreview}
+        fontSize={extractFontSize}
+        onClose={() => setExtractDialogOpen(false)}
+        onChangeModelKey={(value) => {
+          setExtractSelectedModelKey(value)
+          if (!extractAllowPromptEdit && value) {
+            void refreshExtractPromptPreview(value)
+          }
+        }}
+        onChangeUserInstruction={setExtractUserInstruction}
+        onToggleReferenceTable={handleToggleExtractReferenceTable}
+        onChangeAllowPromptEdit={setExtractAllowPromptEdit}
+        onChangePromptPreview={setExtractPromptPreview}
+        onRefreshPromptPreview={() => void refreshExtractPromptPreview()}
+        onChangeFontSize={setExtractFontSize}
+        onSubmit={() => void handleSubmitExtract()}
       />
     </div>
   )

@@ -1,5 +1,12 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000'
 
+type ApiErrorPayload = {
+  message?: string | string[]
+  warnings?: string[]
+  details?: unknown
+  error?: string
+}
+
 export interface LoginResponse {
   accessToken: string
   user: {
@@ -79,11 +86,86 @@ export async function apiClient(endpoint: string, options: RequestInit = {}) {
   })
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Request failed' }))
-    throw new Error(error.message || 'Request failed')
+    const rawText = await response.text()
+    const payload = parseApiErrorPayload(rawText)
+    const message = buildApiErrorMessage(payload, rawText, response.status)
+    const error = new Error(message) as Error & {
+      status?: number
+      warnings?: string[]
+      details?: unknown
+      payload?: ApiErrorPayload
+    }
+    error.status = response.status
+    error.warnings = payload.warnings
+    error.details = payload.details
+    error.payload = payload
+    throw error
   }
 
   return response.json()
+}
+
+function parseApiErrorPayload(rawText: string): ApiErrorPayload {
+  if (!rawText) {
+    return {}
+  }
+
+  try {
+    return JSON.parse(rawText) as ApiErrorPayload
+  } catch {
+    return {
+      message: rawText,
+    }
+  }
+}
+
+function normalizeErrorMessage(message?: string | string[]): string {
+  if (Array.isArray(message)) {
+    return message.filter(Boolean).join('; ')
+  }
+  return message || ''
+}
+
+function stringifyDetails(details: unknown): string {
+  if (details === null || details === undefined) {
+    return ''
+  }
+
+  if (typeof details === 'string') {
+    return details
+  }
+
+  try {
+    return JSON.stringify(details)
+  } catch {
+    return '[details unavailable]'
+  }
+}
+
+function buildApiErrorMessage(payload: ApiErrorPayload, rawText: string, status: number): string {
+  const parts: string[] = []
+  const message = normalizeErrorMessage(payload.message) || payload.error
+
+  if (message) {
+    parts.push(message)
+  } else if (rawText.trim()) {
+    parts.push(rawText.trim())
+  } else {
+    parts.push(`Request failed with status ${status}`)
+  }
+
+  if (payload.warnings?.length) {
+    parts.push(`warnings: ${payload.warnings.join(' | ')}`)
+  }
+
+  if (payload.details !== undefined) {
+    const detailsText = stringifyDetails(payload.details)
+    if (detailsText) {
+      parts.push(`details: ${detailsText}`)
+    }
+  }
+
+  return parts.join('\n\n')
 }
 
 export const api = {

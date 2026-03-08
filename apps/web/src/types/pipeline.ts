@@ -132,3 +132,51 @@ export interface UpsertSetCorePayload {
   constraintText?: string
   mode?: 'update_active' | 'new_version'
 }
+
+export type PipelineExtractReferenceTable =
+  | 'drama_novels'
+  | 'drama_source_text'
+  | 'novel_adaptation_strategy'
+  | 'adaptation_modes'
+  | 'set_core'
+
+export interface PipelineExtractRequest {
+  modelKey: string
+  referenceTables: PipelineExtractReferenceTable[]
+  userInstruction?: string
+  allowPromptEdit?: boolean
+  promptOverride?: string
+}
+
+export interface PipelineExtractPromptPreviewResponse {
+  promptPreview: string
+  usedModelKey: string
+  referenceTables: PipelineExtractReferenceTable[]
+}
+
+export interface PipelineExtractCommitResponse {
+  ok: true
+  summary: {
+    timelines: number
+    characters: number
+    keyNodes: number
+    skeletonTopicItems: number
+    explosions: number
+  }
+  warnings?: string[]
+  details?: {
+    enabledTopicCount: number
+    enabledTopicKeys: string[]
+    normalizedCounts: {
+      timelines: number
+      characters: number
+      keyNodes: number
+      skeletonTopicItems: number
+      explosions: number
+    }
+    skeletonTopicItemsRequestedGroups: number
+    skeletonTopicItemsRequestedItems: number
+    skeletonTopicItemsInserted: number
+    skeletonTopicItemsDropped: number
+  }
+}
