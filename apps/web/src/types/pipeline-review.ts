@@ -45,4 +45,21 @@ export interface PipelineSecondReviewResponse {
   }
   reviewNotes: PipelineSecondReviewNote[]
   warnings?: string[]
+  details?: {
+    reviewNotes: {
+      rawCount: number
+      normalizedCount: number
+      droppedCount: number
+      reviewNotesByTable: Record<string, number>
+    }
+    tables: Record<
+      PipelineSecondReviewTargetTable,
+      {
+        usedAiNotes: number
+        usedFallback: boolean
+        mergedWithHistory: number
+        insertedRows: number
+      }
+    >
+  }
 }

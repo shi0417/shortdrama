@@ -419,12 +419,15 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
             .map((item) => `${item.table}: ${item.issue} -> ${item.fix}`)
             .join('\n- ')}`
         : ''
+      const detailText = result.details
+        ? `\n\nnotes details:\n真实AI修正说明：${result.details.reviewNotes.normalizedCount} / 原始返回 ${result.details.reviewNotes.rawCount} / 丢弃 ${result.details.reviewNotes.droppedCount}\n表级摘要：\n- timelines: ai=${result.details.tables.novel_timelines.usedAiNotes}, fallback=${result.details.tables.novel_timelines.usedFallback ? 'yes' : 'no'}, merged=${result.details.tables.novel_timelines.mergedWithHistory}\n- characters: ai=${result.details.tables.novel_characters.usedAiNotes}, fallback=${result.details.tables.novel_characters.usedFallback ? 'yes' : 'no'}, merged=${result.details.tables.novel_characters.mergedWithHistory}\n- keyNodes: ai=${result.details.tables.novel_key_nodes.usedAiNotes}, fallback=${result.details.tables.novel_key_nodes.usedFallback ? 'yes' : 'no'}, merged=${result.details.tables.novel_key_nodes.mergedWithHistory}\n- skeletonTopicItems: ai=${result.details.tables.novel_skeleton_topic_items.usedAiNotes}, fallback=${result.details.tables.novel_skeleton_topic_items.usedFallback ? 'yes' : 'no'}, merged=${result.details.tables.novel_skeleton_topic_items.mergedWithHistory}\n- explosions: ai=${result.details.tables.novel_explosions.usedAiNotes}, fallback=${result.details.tables.novel_explosions.usedFallback ? 'yes' : 'no'}, merged=${result.details.tables.novel_explosions.mergedWithHistory}`
+        : ''
       const warningText = result.warnings?.length
         ? `\n\nwarnings:\n- ${result.warnings.join('\n- ')}`
         : ''
 
       alert(
-        `二次AI自检完成\n时间线：${result.summary.timelines}\n人物：${result.summary.characters}\n关键节点：${result.summary.keyNodes}\n骨架主题内容：${result.summary.skeletonTopicItems}\n爆点：${result.summary.explosions}${reviewNoteText}${warningText}`
+        `二次AI自检完成\n时间线：${result.summary.timelines}\n人物：${result.summary.characters}\n关键节点：${result.summary.keyNodes}\n骨架主题内容：${result.summary.skeletonTopicItems}\n爆点：${result.summary.explosions}${detailText}${reviewNoteText}${warningText}`
       )
     } catch (err: any) {
       alert(err?.message || '二次AI自检失败')

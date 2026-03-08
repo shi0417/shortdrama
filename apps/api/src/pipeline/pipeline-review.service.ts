@@ -57,7 +57,7 @@ type ExplosionInput = {
 };
 
 type ReviewNoteInput = {
-  table: string;
+  table: PipelineSecondReviewTargetTable;
   issue: string;
   fix: string;
 };
@@ -82,11 +82,31 @@ type RevisionNoteEntry = {
   reviewModel: string;
   reviewBatchId: string;
   targetTable: string;
+  source: 'ai' | 'fallback';
   action: string;
   reason: string;
   beforeSummary: string;
   afterSummary: string;
 };
+
+type ReviewNotesDiagnostics = {
+  rawCount: number;
+  normalizedCount: number;
+  droppedCount: number;
+  reviewNotesByTable: Record<string, number>;
+};
+
+type TableWriteDetails = {
+  usedAiNotes: number;
+  usedFallback: boolean;
+  mergedWithHistory: number;
+  insertedRows: number;
+};
+
+type ExistingRevisionNotesIndex = Record<
+  PipelineSecondReviewTargetTable,
+  Map<string, RevisionNoteEntry[]>
+>;
 
 export type PipelineSecondReviewPromptPreviewResponse = {
   promptPreview: string;
@@ -106,6 +126,10 @@ export type PipelineSecondReviewResponse = {
   };
   reviewNotes: ReviewNoteInput[];
   warnings?: string[];
+  details?: {
+    reviewNotes: ReviewNotesDiagnostics;
+    tables: Record<PipelineSecondReviewTargetTable, TableWriteDetails>;
+  };
 };
 
 const DEFAULT_REFERENCE_TABLES: PipelineSecondReviewReferenceTable[] = [
@@ -171,7 +195,7 @@ export class PipelineReviewService {
 
     const aiJson = await this.callLcAiApi(usedModelKey, promptPreview);
     const topicMap = await this.getEnabledSkeletonTopicMap(novelId);
-    const { normalized, warnings } = this.validateAndNormalizeReviewResult(
+    const { normalized, warnings, noteDiagnostics } = this.validateAndNormalizeReviewResult(
       aiJson,
       topicMap,
       targetTables,
@@ -187,7 +211,7 @@ export class PipelineReviewService {
       reviewedAt,
     );
 
-    const summary = await this.persistReviewedData(
+    const { summary, tableDetails } = await this.persistReviewedData(
       novelId,
       targetTables,
       normalized,
@@ -201,6 +225,10 @@ export class PipelineReviewService {
       summary,
       reviewNotes: normalized.reviewNotes,
       warnings: warnings.length ? warnings : undefined,
+      details: {
+        reviewNotes: noteDiagnostics,
+        tables: tableDetails,
+      },
     };
   }
 
@@ -300,6 +328,7 @@ export class PipelineReviewService {
       '6. skeletonTopicItems 必须严格围绕系统提供的 topic 定义，不允许泛泛复述 source_text。',
       '7. explosions 要更像短剧爆点，而不是普通摘要。',
       '8. reviewNotes 用于说明本次发现的问题与修正动作。',
+      '9. reviewNotes.table 必须使用数据库目标表全名之一：novel_timelines、novel_characters、novel_key_nodes、novel_skeleton_topic_items、novel_explosions。',
       '',
       '【输出要求】',
       '1. 必须输出严格 JSON。',
@@ -337,7 +366,7 @@ export class PipelineReviewService {
       '    { "explosionType": "字符串", "title": "字符串", "subtitle": "字符串", "sceneRestoration": "字符串", "dramaticQuality": "字符串", "adaptability": "字符串", "timelineRef": "字符串，可选" }',
       '  ],',
       '  "reviewNotes": [',
-      '    { "table": "字符串", "issue": "字符串", "fix": "字符串" }',
+      '    { "table": "必须是 novel_timelines/novel_characters/novel_key_nodes/novel_skeleton_topic_items/novel_explosions 之一", "issue": "字符串", "fix": "字符串" }',
       '  ]',
       '}',
     ].join('\n');
@@ -650,7 +679,11 @@ export class PipelineReviewService {
     aiJson: Record<string, unknown>,
     topicMap: Map<string, { id: number; topicKey: string }>,
     targetTables: PipelineSecondReviewTargetTable[],
-  ): { normalized: PipelineReviewAiResult; warnings: string[] } {
+  ): {
+    normalized: PipelineReviewAiResult;
+    warnings: string[];
+    noteDiagnostics: ReviewNotesDiagnostics;
+  } {
     const requiredKeys = [
       'timelines',
       'characters',
@@ -675,8 +708,9 @@ export class PipelineReviewService {
       warnings,
     );
     const explosions = this.normalizeExplosions(aiJson.explosions as unknown[], warnings);
-    const reviewNotes = this.normalizeReviewNotes(
-      Array.isArray(aiJson.reviewNotes) ? (aiJson.reviewNotes as unknown[]) : [],
+    const rawReviewNotes = Array.isArray(aiJson.reviewNotes) ? (aiJson.reviewNotes as unknown[]) : [];
+    const { reviewNotes, diagnostics: noteDiagnostics } = this.normalizeReviewNotes(
+      rawReviewNotes,
       targetTables,
       warnings,
     );
@@ -691,6 +725,7 @@ export class PipelineReviewService {
         reviewNotes,
       },
       warnings,
+      noteDiagnostics,
     };
   }
 
@@ -698,30 +733,57 @@ export class PipelineReviewService {
     items: unknown[],
     targetTables: PipelineSecondReviewTargetTable[],
     warnings: string[],
-  ): ReviewNoteInput[] {
+  ): { reviewNotes: ReviewNoteInput[]; diagnostics: ReviewNotesDiagnostics } {
     const allowed = new Set<string>(targetTables);
     const result: ReviewNoteInput[] = [];
+    const byTable = new Map<string, number>();
+    let droppedCount = 0;
 
     for (const raw of items) {
       const item = this.asRecord(raw);
-      const table = this.normalizeText(item.table);
+      const rawTable = this.normalizeText(item.table);
+      const table = this.normalizeReviewNoteTableName(rawTable);
       const issue = this.normalizeText(item.issue);
       const fix = this.normalizeText(item.fix);
 
-      if (!table || !issue || !fix) {
+      if (!rawTable || !issue || !fix) {
         warnings.push('Dropped reviewNote because table/issue/fix is empty');
+        droppedCount += 1;
+        continue;
+      }
+
+      if (!table) {
+        warnings.push(`Dropped reviewNote because table name is unsupported: ${rawTable}`);
+        droppedCount += 1;
         continue;
       }
 
       if (!allowed.has(table)) {
         warnings.push(`Dropped reviewNote because table is not selected: ${table}`);
+        droppedCount += 1;
         continue;
       }
 
       result.push({ table, issue, fix });
+      byTable.set(table, (byTable.get(table) ?? 0) + 1);
     }
 
-    return result;
+    this.logReviewStage('review notes normalized', {
+      rawReviewNotesCount: items.length,
+      normalizedReviewNotesCount: result.length,
+      droppedReviewNotesCount: droppedCount,
+      reviewNotesByTable: Object.fromEntries(byTable.entries()),
+    });
+
+    return {
+      reviewNotes: result,
+      diagnostics: {
+        rawCount: items.length,
+        normalizedCount: result.length,
+        droppedCount,
+        reviewNotesByTable: Object.fromEntries(byTable.entries()),
+      },
+    };
   }
 
   private async persistReviewedData(
@@ -731,12 +793,22 @@ export class PipelineReviewService {
     topicMap: Map<string, { id: number; topicKey: string }>,
     revisionNotesByTable: Map<PipelineSecondReviewTargetTable, RevisionNoteEntry[]>,
     warnings: string[],
-  ): Promise<PipelineSecondReviewResponse['summary']> {
+  ): Promise<{
+    summary: PipelineSecondReviewResponse['summary'];
+    tableDetails: Record<PipelineSecondReviewTargetTable, TableWriteDetails>;
+  }> {
     this.logReviewStage('transaction start', { novelId, targetTables });
 
     try {
-      const summary = await this.dataSource.transaction(async (manager) => {
+      const resultWithDetails = await this.dataSource.transaction(async (manager) => {
+        const existingNotesIndex = await this.loadExistingRevisionNotesIndex(
+          novelId,
+          targetTables,
+          manager,
+        );
         await this.deleteSelectedData(novelId, targetTables, manager);
+
+        const tableDetails = this.createInitialTableWriteDetails(targetTables, revisionNotesByTable);
 
         const shouldWriteTimelines = targetTables.includes('novel_timelines');
         const shouldWriteCharacters = targetTables.includes('novel_characters');
@@ -752,6 +824,8 @@ export class PipelineReviewService {
               result.timelines,
               manager,
               revisionNotesByTable.get('novel_timelines') ?? null,
+              existingNotesIndex.novel_timelines,
+              tableDetails.novel_timelines,
             )
           : await this.loadExistingTimelines(novelId, manager);
         const timelineLookup = this.buildTimelineLookup(insertedTimelines);
@@ -762,6 +836,8 @@ export class PipelineReviewService {
               result.characters,
               manager,
               revisionNotesByTable.get('novel_characters') ?? null,
+              existingNotesIndex.novel_characters,
+              tableDetails.novel_characters,
             )
           : 0;
 
@@ -772,6 +848,8 @@ export class PipelineReviewService {
               timelineLookup,
               manager,
               revisionNotesByTable.get('novel_key_nodes') ?? null,
+              existingNotesIndex.novel_key_nodes,
+              tableDetails.novel_key_nodes,
             )
           : 0;
 
@@ -783,6 +861,8 @@ export class PipelineReviewService {
               manager,
               warnings,
               revisionNotesByTable.get('novel_skeleton_topic_items') ?? null,
+              existingNotesIndex.novel_skeleton_topic_items,
+              tableDetails.novel_skeleton_topic_items,
             )
           : 0;
 
@@ -794,20 +874,47 @@ export class PipelineReviewService {
               manager,
               warnings,
               revisionNotesByTable.get('novel_explosions') ?? null,
+              existingNotesIndex.novel_explosions,
+              tableDetails.novel_explosions,
             )
           : 0;
 
+        if (shouldWriteTimelines) {
+          tableDetails.novel_timelines.insertedRows = result.timelines.length;
+        }
+        if (shouldWriteCharacters) {
+          tableDetails.novel_characters.insertedRows = insertedCharacters;
+        }
+        if (shouldWriteKeyNodes) {
+          tableDetails.novel_key_nodes.insertedRows = insertedKeyNodes;
+        }
+        if (shouldWriteSkeletonTopicItems) {
+          tableDetails.novel_skeleton_topic_items.insertedRows = insertedSkeletonTopicItems;
+        }
+        if (shouldWriteExplosions) {
+          tableDetails.novel_explosions.insertedRows = insertedExplosions;
+        }
+
+        this.logReviewStage('revision note usage summary', tableDetails);
+
         return {
-          timelines: shouldWriteTimelines ? result.timelines.length : 0,
-          characters: insertedCharacters,
-          keyNodes: insertedKeyNodes,
-          skeletonTopicItems: insertedSkeletonTopicItems,
-          explosions: insertedExplosions,
+          summary: {
+            timelines: shouldWriteTimelines ? result.timelines.length : 0,
+            characters: insertedCharacters,
+            keyNodes: insertedKeyNodes,
+            skeletonTopicItems: insertedSkeletonTopicItems,
+            explosions: insertedExplosions,
+          },
+          tableDetails,
         };
       });
 
-      this.logReviewStage('transaction commit', { novelId, summary });
-      return summary;
+      this.logReviewStage('transaction commit', {
+        novelId,
+        summary: resultWithDetails.summary,
+        tableDetails: resultWithDetails.tableDetails,
+      });
+      return resultWithDetails;
     } catch (error) {
       this.logReviewStage(
         'transaction rollback',
@@ -865,6 +972,8 @@ export class PipelineReviewService {
     timelines: TimelineInput[],
     manager: EntityManager,
     revisionNotes: RevisionNoteEntry[] | null,
+    existingNotesIndex: Map<string, RevisionNoteEntry[]>,
+    tableDetails: TableWriteDetails,
   ): Promise<TimelineLookupRow[]> {
     const inserted: TimelineLookupRow[] = [];
 
@@ -884,7 +993,13 @@ export class PipelineReviewService {
             item.timeNode,
             item.event,
             index,
-            revisionNotes?.length ? JSON.stringify(revisionNotes) : null,
+            JSON.stringify(
+              this.mergeRevisionNotes(
+                existingNotesIndex.get(this.buildTimelineRevisionKey(item.timeNode, item.event)),
+                revisionNotes,
+                tableDetails,
+              ),
+            ),
           ],
         );
         inserted.push({
@@ -912,6 +1027,8 @@ export class PipelineReviewService {
     characters: CharacterInput[],
     manager: EntityManager,
     revisionNotes: RevisionNoteEntry[] | null,
+    existingNotesIndex: Map<string, RevisionNoteEntry[]>,
+    tableDetails: TableWriteDetails,
   ): Promise<number> {
     for (const [index, item] of characters.entries()) {
       this.assertMaxLength('novel_characters', 'name', item.name, 100, index);
@@ -939,7 +1056,13 @@ export class PipelineReviewService {
             item.personality || null,
             item.settingWords || null,
             index,
-            revisionNotes?.length ? JSON.stringify(revisionNotes) : null,
+            JSON.stringify(
+              this.mergeRevisionNotes(
+                existingNotesIndex.get(this.buildCharacterRevisionKey(item.name)),
+                revisionNotes,
+                tableDetails,
+              ),
+            ),
           ],
         );
       } catch (error) {
@@ -963,6 +1086,8 @@ export class PipelineReviewService {
     timelineLookup: Map<string, number>,
     manager: EntityManager,
     revisionNotes: RevisionNoteEntry[] | null,
+    existingNotesIndex: Map<string, RevisionNoteEntry[]>,
+    tableDetails: TableWriteDetails,
   ): Promise<number> {
     for (const [index, item] of keyNodes.entries()) {
       const category = item.category || '未分类';
@@ -989,7 +1114,13 @@ export class PipelineReviewService {
             item.title,
             item.description || null,
             index,
-            revisionNotes?.length ? JSON.stringify(revisionNotes) : null,
+            JSON.stringify(
+              this.mergeRevisionNotes(
+                existingNotesIndex.get(this.buildKeyNodeRevisionKey(category, item.title)),
+                revisionNotes,
+                tableDetails,
+              ),
+            ),
           ],
         );
       } catch (error) {
@@ -1014,6 +1145,8 @@ export class PipelineReviewService {
     manager: EntityManager,
     warnings: string[],
     revisionNotes: RevisionNoteEntry[] | null,
+    existingNotesIndex: Map<string, RevisionNoteEntry[]>,
+    tableDetails: TableWriteDetails,
   ): Promise<number> {
     let total = 0;
 
@@ -1064,7 +1197,15 @@ export class PipelineReviewService {
               item.contentJson === null ? null : JSON.stringify(item.contentJson),
               index,
               sourceRef || null,
-              revisionNotes?.length ? JSON.stringify(revisionNotes) : null,
+              JSON.stringify(
+                this.mergeRevisionNotes(
+                  existingNotesIndex.get(
+                    this.buildSkeletonItemRevisionKey(topic.id, itemTitle, item.content),
+                  ),
+                  revisionNotes,
+                  tableDetails,
+                ),
+              ),
             ],
           );
           total += 1;
@@ -1095,6 +1236,8 @@ export class PipelineReviewService {
     manager: EntityManager,
     warnings: string[],
     revisionNotes: RevisionNoteEntry[] | null,
+    existingNotesIndex: Map<string, RevisionNoteEntry[]>,
+    tableDetails: TableWriteDetails,
   ): Promise<number> {
     for (const [index, item] of explosions.entries()) {
       this.assertMaxLength('novel_explosions', 'explosion_type', item.explosionType, 50, index);
@@ -1134,7 +1277,15 @@ export class PipelineReviewService {
             item.dramaticQuality || null,
             item.adaptability || null,
             index,
-            revisionNotes?.length ? JSON.stringify(revisionNotes) : null,
+            JSON.stringify(
+              this.mergeRevisionNotes(
+                existingNotesIndex.get(
+                  this.buildExplosionRevisionKey(item.explosionType, item.title),
+                ),
+                revisionNotes,
+                tableDetails,
+              ),
+            ),
           ],
         );
       } catch (error) {
@@ -1168,6 +1319,7 @@ export class PipelineReviewService {
           reviewModel,
           reviewBatchId,
           targetTable: tableName,
+          source: 'ai' as const,
           action: 'updated',
           reason: note.issue,
           beforeSummary: note.issue,
@@ -1184,16 +1336,284 @@ export class PipelineReviewService {
                 reviewModel,
                 reviewBatchId,
                 targetTable: tableName,
+                source: 'fallback' as const,
                 action: 'reviewed',
-                reason: 'AI second review executed',
+                reason: 'AI reviewNotes missing for this table',
                 beforeSummary: 'Existing generated result reviewed',
                 afterSummary: 'Result rewritten during the current review batch',
               },
             ],
       );
+
+      this.logReviewStage('table revision notes prepared', {
+        tableName,
+        usedAiNotesCount: tableNotes.length,
+        usedFallback: tableNotes.length === 0,
+        finalRevisionNotesCount: result.get(tableName)?.length ?? 0,
+      });
     }
 
     return result;
+  }
+
+  private createInitialTableWriteDetails(
+    targetTables: PipelineSecondReviewTargetTable[],
+    revisionNotesByTable: Map<PipelineSecondReviewTargetTable, RevisionNoteEntry[]>,
+  ): Record<PipelineSecondReviewTargetTable, TableWriteDetails> {
+    const allTables: PipelineSecondReviewTargetTable[] = [
+      'novel_timelines',
+      'novel_characters',
+      'novel_key_nodes',
+      'novel_skeleton_topic_items',
+      'novel_explosions',
+    ];
+    const details = {} as Record<PipelineSecondReviewTargetTable, TableWriteDetails>;
+    for (const tableName of allTables) {
+      const notes = revisionNotesByTable.get(tableName) ?? [];
+      details[tableName] = {
+        usedAiNotes: notes.filter((item) => item.source === 'ai').length,
+        usedFallback: notes.some((item) => item.source === 'fallback'),
+        mergedWithHistory: 0,
+        insertedRows: 0,
+      };
+    }
+    return details;
+  }
+
+  private normalizeReviewNoteTableName(
+    raw: string,
+  ): PipelineSecondReviewTargetTable | null {
+    const normalized = raw.trim().toLowerCase();
+    switch (normalized) {
+      case 'timelines':
+      case 'novel_timelines':
+        return 'novel_timelines';
+      case 'characters':
+      case 'novel_characters':
+        return 'novel_characters';
+      case 'keynodes':
+      case 'key_nodes':
+      case 'novel_key_nodes':
+        return 'novel_key_nodes';
+      case 'skeletontopicitems':
+      case 'skeleton_topic_items':
+      case 'novel_skeleton_topic_items':
+        return 'novel_skeleton_topic_items';
+      case 'explosions':
+      case 'novel_explosions':
+        return 'novel_explosions';
+      default:
+        return null;
+    }
+  }
+
+  private async loadExistingRevisionNotesIndex(
+    novelId: number,
+    targetTables: PipelineSecondReviewTargetTable[],
+    manager: EntityManager,
+  ): Promise<ExistingRevisionNotesIndex> {
+    const index = {
+      novel_timelines: new Map<string, RevisionNoteEntry[]>(),
+      novel_characters: new Map<string, RevisionNoteEntry[]>(),
+      novel_key_nodes: new Map<string, RevisionNoteEntry[]>(),
+      novel_skeleton_topic_items: new Map<string, RevisionNoteEntry[]>(),
+      novel_explosions: new Map<string, RevisionNoteEntry[]>(),
+    } satisfies ExistingRevisionNotesIndex;
+
+    if (targetTables.includes('novel_timelines')) {
+      const rows = await manager.query(
+        `SELECT time_node AS timeNode, event, revision_notes_json FROM novel_timelines WHERE novel_id = ?`,
+        [novelId],
+      );
+      for (const row of rows) {
+        const key = this.buildTimelineRevisionKey(row.timeNode, row.event);
+        this.appendExistingNotes(index.novel_timelines, key, row.revision_notes_json, 'novel_timelines');
+      }
+    }
+
+    if (targetTables.includes('novel_characters')) {
+      const rows = await manager.query(
+        `SELECT name, revision_notes_json FROM novel_characters WHERE novel_id = ?`,
+        [novelId],
+      );
+      for (const row of rows) {
+        const key = this.buildCharacterRevisionKey(row.name);
+        this.appendExistingNotes(index.novel_characters, key, row.revision_notes_json, 'novel_characters');
+      }
+    }
+
+    if (targetTables.includes('novel_key_nodes')) {
+      const rows = await manager.query(
+        `SELECT category, title, revision_notes_json FROM novel_key_nodes WHERE novel_id = ?`,
+        [novelId],
+      );
+      for (const row of rows) {
+        const key = this.buildKeyNodeRevisionKey(row.category, row.title);
+        this.appendExistingNotes(index.novel_key_nodes, key, row.revision_notes_json, 'novel_key_nodes');
+      }
+    }
+
+    if (targetTables.includes('novel_skeleton_topic_items')) {
+      const rows = await manager.query(
+        `SELECT topic_id AS topicId, item_title AS itemTitle, content, revision_notes_json FROM novel_skeleton_topic_items WHERE novel_id = ?`,
+        [novelId],
+      );
+      for (const row of rows) {
+        const key = this.buildSkeletonItemRevisionKey(row.topicId, row.itemTitle, row.content);
+        this.appendExistingNotes(
+          index.novel_skeleton_topic_items,
+          key,
+          row.revision_notes_json,
+          'novel_skeleton_topic_items',
+        );
+      }
+    }
+
+    if (targetTables.includes('novel_explosions')) {
+      const rows = await manager.query(
+        `SELECT explosion_type AS explosionType, title, revision_notes_json FROM novel_explosions WHERE novel_id = ?`,
+        [novelId],
+      );
+      for (const row of rows) {
+        const key = this.buildExplosionRevisionKey(row.explosionType, row.title);
+        this.appendExistingNotes(index.novel_explosions, key, row.revision_notes_json, 'novel_explosions');
+      }
+    }
+
+    return index;
+  }
+
+  private appendExistingNotes(
+    target: Map<string, RevisionNoteEntry[]>,
+    key: string,
+    rawNotes: unknown,
+    tableName: PipelineSecondReviewTargetTable,
+  ): void {
+    if (!key) {
+      return;
+    }
+    const parsed = this.parseExistingRevisionNotes(rawNotes, tableName);
+    if (!parsed.length) {
+      return;
+    }
+    target.set(key, [...(target.get(key) ?? []), ...parsed]);
+  }
+
+  private parseExistingRevisionNotes(
+    rawNotes: unknown,
+    tableName: PipelineSecondReviewTargetTable,
+  ): RevisionNoteEntry[] {
+    if (rawNotes === null || rawNotes === undefined || rawNotes === '') {
+      return [];
+    }
+
+    if (typeof rawNotes !== 'string') {
+      throw new BadRequestException(
+        `读取 ${tableName} 的 revision_notes_json 失败：字段不是字符串，无法合并历史记录`,
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawNotes);
+    } catch (error) {
+      throw new BadRequestException(
+        `读取 ${tableName} 的 revision_notes_json 失败：不是合法 JSON。原始错误：${this.getErrorMessage(error)}`,
+      );
+    }
+
+    if (!Array.isArray(parsed)) {
+      throw new BadRequestException(
+        `读取 ${tableName} 的 revision_notes_json 失败：JSON 根结构不是数组，无法合并历史记录`,
+      );
+    }
+
+    return parsed.map((item, index) => {
+      const record = this.asRecord(item);
+      const reviewedAt = this.normalizeText(record.reviewedAt);
+      const reviewModel = this.normalizeText(record.reviewModel);
+      const reviewBatchId = this.normalizeText(record.reviewBatchId);
+      const targetTable = this.normalizeText(record.targetTable) || tableName;
+      const source =
+        this.normalizeText(record.source) === 'fallback' ? 'fallback' : 'ai';
+      const action = this.normalizeText(record.action);
+      const reason = this.normalizeText(record.reason);
+      const beforeSummary = this.normalizeText(record.beforeSummary);
+      const afterSummary = this.normalizeText(record.afterSummary);
+
+      if (!reviewedAt || !reviewModel || !reviewBatchId || !action || !reason) {
+        throw new BadRequestException(
+          `读取 ${tableName} 的 revision_notes_json 失败：第 ${index + 1} 条历史 note 缺少必要字段`,
+        );
+      }
+
+      return {
+        reviewedAt,
+        reviewModel,
+        reviewBatchId,
+        targetTable,
+        source,
+        action,
+        reason,
+        beforeSummary,
+        afterSummary,
+      };
+    });
+  }
+
+  private mergeRevisionNotes(
+    existingNotes: RevisionNoteEntry[] | undefined,
+    currentNotes: RevisionNoteEntry[] | null,
+    tableDetails: TableWriteDetails,
+  ): RevisionNoteEntry[] {
+    const merged = [...(existingNotes ?? [])];
+    if (existingNotes?.length) {
+      tableDetails.mergedWithHistory += 1;
+    }
+    for (const note of currentNotes ?? []) {
+      const duplicate = merged.some(
+        (existing) =>
+          existing.reviewBatchId === note.reviewBatchId &&
+          existing.targetTable === note.targetTable &&
+          existing.reason === note.reason &&
+          existing.afterSummary === note.afterSummary,
+      );
+      if (!duplicate) {
+        merged.push(note);
+      }
+    }
+    return merged;
+  }
+
+  private buildTimelineRevisionKey(timeNode: unknown, event: unknown): string {
+    return `${this.normalizeComparableText(timeNode)}::${this.normalizeComparableText(event)}`;
+  }
+
+  private buildCharacterRevisionKey(name: unknown): string {
+    return this.normalizeComparableText(name);
+  }
+
+  private buildKeyNodeRevisionKey(category: unknown, title: unknown): string {
+    return `${this.normalizeComparableText(category)}::${this.normalizeComparableText(title)}`;
+  }
+
+  private buildSkeletonItemRevisionKey(
+    topicId: unknown,
+    itemTitle: unknown,
+    content: unknown,
+  ): string {
+    const normalizedTitle = this.normalizeComparableText(itemTitle);
+    const normalizedContent = this.normalizeComparableText(
+      this.previewText(content, 120),
+    );
+    return `${String(topicId ?? '')}::${normalizedTitle || normalizedContent}`;
+  }
+
+  private buildExplosionRevisionKey(
+    explosionType: unknown,
+    title: unknown,
+  ): string {
+    return `${this.normalizeComparableText(explosionType)}::${this.normalizeComparableText(title)}`;
   }
 
   private buildTimelineLookup(rows: TimelineLookupRow[]): Map<string, number> {
