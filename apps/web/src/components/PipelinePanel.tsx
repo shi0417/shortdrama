@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { api, PipelineOverviewDto } from '@/lib/api'
 import { setCoreApi } from '@/lib/set-core-api'
 import { pipelineAiApi } from '@/lib/pipeline-ai-api'
+import { pipelineReviewApi } from '@/lib/pipeline-review-api'
 import {
   AiModelOptionDto,
   EnhanceSetCoreCurrentFields,
@@ -11,11 +12,16 @@ import {
   SetCoreVersionDto,
   UpsertSetCorePayload,
 } from '@/types/pipeline'
+import {
+  PipelineSecondReviewReferenceTable,
+  PipelineSecondReviewTargetTable,
+} from '@/types/pipeline-review'
 import SkeletonTopicsPanel from './pipeline/SkeletonTopicsPanel'
 import AdaptationStrategyToolbar from './pipeline/AdaptationStrategyToolbar'
 import SetCoreEditor from './pipeline/SetCoreEditor'
 import SetCoreEnhanceDialog from './pipeline/SetCoreEnhanceDialog'
 import PipelineExtractDialog from './pipeline/PipelineExtractDialog'
+import PipelineSecondReviewDialog from './pipeline/PipelineSecondReviewDialog'
 
 interface PipelinePanelProps {
   novelId: number
@@ -42,6 +48,21 @@ const defaultEnhanceReferenceTables = [
 ]
 
 const defaultExtractReferenceTables: PipelineExtractReferenceTable[] = [
+  'drama_novels',
+  'drama_source_text',
+  'novel_adaptation_strategy',
+  'adaptation_modes',
+  'set_core',
+]
+
+const defaultSecondReviewTargetTables: PipelineSecondReviewTargetTable[] = [
+  'novel_characters',
+  'novel_key_nodes',
+  'novel_skeleton_topic_items',
+  'novel_explosions',
+]
+
+const defaultSecondReviewReferenceTables: PipelineSecondReviewReferenceTable[] = [
   'drama_novels',
   'drama_source_text',
   'novel_adaptation_strategy',
@@ -118,6 +139,19 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [extractSelectedModelKey, setExtractSelectedModelKey] = useState('')
   const [extractFontSize, setExtractFontSize] = useState(14)
   const [extractRefreshKey, setExtractRefreshKey] = useState(0)
+  const [secondReviewDialogOpen, setSecondReviewDialogOpen] = useState(false)
+  const [secondReviewModels, setSecondReviewModels] = useState<AiModelOptionDto[]>([])
+  const [secondReviewLoading, setSecondReviewLoading] = useState(false)
+  const [secondReviewSubmitting, setSecondReviewSubmitting] = useState(false)
+  const [secondReviewTargetTables, setSecondReviewTargetTables] =
+    useState<PipelineSecondReviewTargetTable[]>(defaultSecondReviewTargetTables)
+  const [secondReviewReferenceTables, setSecondReviewReferenceTables] =
+    useState<PipelineSecondReviewReferenceTable[]>(defaultSecondReviewReferenceTables)
+  const [secondReviewPromptPreview, setSecondReviewPromptPreview] = useState('')
+  const [secondReviewAllowPromptEdit, setSecondReviewAllowPromptEdit] = useState(false)
+  const [secondReviewUserInstruction, setSecondReviewUserInstruction] = useState('')
+  const [secondReviewSelectedModelKey, setSecondReviewSelectedModelKey] = useState('')
+  const [secondReviewFontSize, setSecondReviewFontSize] = useState(14)
 
   const loadOverview = async () => {
     try {
@@ -271,6 +305,132 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
 
   const handlePreStep3Action = () => {
     void handleOpenExtractDialog()
+  }
+
+  const loadSecondReviewModels = async () => {
+    const models = await pipelineAiApi.listAiModelOptions()
+    setSecondReviewModels(models || [])
+    return models || []
+  }
+
+  const refreshSecondReviewPromptPreview = async (modelKey?: string) => {
+    const resolvedModelKey = modelKey || secondReviewSelectedModelKey
+    if (!resolvedModelKey) {
+      return
+    }
+
+    try {
+      setSecondReviewLoading(true)
+      const preview = await pipelineReviewApi.previewPipelineSecondReviewPrompt(novelId, {
+        modelKey: resolvedModelKey,
+        targetTables: secondReviewTargetTables,
+        referenceTables: secondReviewReferenceTables,
+        userInstruction: secondReviewUserInstruction || undefined,
+        allowPromptEdit: secondReviewAllowPromptEdit,
+        promptOverride:
+          secondReviewAllowPromptEdit && secondReviewPromptPreview.trim()
+            ? secondReviewPromptPreview
+            : undefined,
+      })
+      setSecondReviewPromptPreview(preview.promptPreview || '')
+      if (!secondReviewSelectedModelKey && preview.usedModelKey) {
+        setSecondReviewSelectedModelKey(preview.usedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '生成二次AI自检 prompt 预览失败')
+    } finally {
+      setSecondReviewLoading(false)
+    }
+  }
+
+  const handleOpenSecondReviewDialog = async () => {
+    try {
+      setSecondReviewDialogOpen(true)
+
+      let resolvedModelKey = secondReviewSelectedModelKey
+      let models = secondReviewModels
+      if (!models.length) {
+        models = await loadSecondReviewModels()
+      }
+      if (!resolvedModelKey && models.length) {
+        resolvedModelKey = models[0].modelKey
+        setSecondReviewSelectedModelKey(resolvedModelKey)
+      }
+
+      if (!secondReviewTargetTables.length) {
+        setSecondReviewTargetTables(defaultSecondReviewTargetTables)
+      }
+      if (!secondReviewReferenceTables.length) {
+        setSecondReviewReferenceTables(defaultSecondReviewReferenceTables)
+      }
+
+      if (resolvedModelKey) {
+        await refreshSecondReviewPromptPreview(resolvedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '打开二次AI自检弹窗失败')
+    }
+  }
+
+  const handleToggleSecondReviewTargetTable = (table: PipelineSecondReviewTargetTable) => {
+    setSecondReviewTargetTables((prev) =>
+      prev.includes(table) ? prev.filter((item) => item !== table) : [...prev, table]
+    )
+  }
+
+  const handleToggleSecondReviewReferenceTable = (
+    table: PipelineSecondReviewReferenceTable
+  ) => {
+    setSecondReviewReferenceTables((prev) =>
+      prev.includes(table) ? prev.filter((item) => item !== table) : [...prev, table]
+    )
+  }
+
+  const handleSubmitSecondReview = async () => {
+    if (!secondReviewSelectedModelKey) {
+      alert('请选择 AI 模型')
+      return
+    }
+    if (!secondReviewTargetTables.length) {
+      alert('请至少选择一个检测对象表')
+      return
+    }
+
+    try {
+      setSecondReviewSubmitting(true)
+      const result = await pipelineReviewApi.runPipelineSecondReview(novelId, {
+        modelKey: secondReviewSelectedModelKey,
+        targetTables: secondReviewTargetTables,
+        referenceTables: secondReviewReferenceTables,
+        userInstruction: secondReviewUserInstruction || undefined,
+        allowPromptEdit: secondReviewAllowPromptEdit,
+        promptOverride:
+          secondReviewAllowPromptEdit && secondReviewPromptPreview.trim()
+            ? secondReviewPromptPreview
+            : undefined,
+      })
+
+      await loadOverview()
+      setExtractRefreshKey((prev) => prev + 1)
+      setSecondReviewDialogOpen(false)
+
+      const reviewNoteText = result.reviewNotes?.length
+        ? `\n\nreviewNotes:\n- ${result.reviewNotes
+            .map((item) => `${item.table}: ${item.issue} -> ${item.fix}`)
+            .join('\n- ')}`
+        : ''
+      const warningText = result.warnings?.length
+        ? `\n\nwarnings:\n- ${result.warnings.join('\n- ')}`
+        : ''
+
+      alert(
+        `二次AI自检完成\n时间线：${result.summary.timelines}\n人物：${result.summary.characters}\n关键节点：${result.summary.keyNodes}\n骨架主题内容：${result.summary.skeletonTopicItems}\n爆点：${result.summary.explosions}${reviewNoteText}${warningText}`
+      )
+    } catch (err: any) {
+      alert(err?.message || '二次AI自检失败')
+    } finally {
+      setSecondReviewSubmitting(false)
+    }
   }
 
   const fillSetCoreEditor = (row: {
@@ -886,20 +1046,36 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
             在生成世界观前，先执行历史骨架抽取与爆点生成。
           </div>
         </div>
-        <button
-          onClick={handlePreStep3Action}
-          style={{
-            padding: '6px 12px',
-            border: 'none',
-            borderRadius: '4px',
-            background: '#1890ff',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: '13px',
-          }}
-        >
-          抽取历史骨架和生成爆点
-        </button>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={handlePreStep3Action}
+            style={{
+              padding: '6px 12px',
+              border: 'none',
+              borderRadius: '4px',
+              background: '#1890ff',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            抽取历史骨架和生成爆点
+          </button>
+          <button
+            onClick={() => void handleOpenSecondReviewDialog()}
+            style={{
+              padding: '6px 12px',
+              border: 'none',
+              borderRadius: '4px',
+              background: '#1890ff',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            二次AI自检
+          </button>
+        </div>
       </div>
 
       <div style={{ border: '1px solid #e8e8e8', borderRadius: '8px', overflow: 'hidden' }}>
@@ -1082,6 +1258,35 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         onRefreshPromptPreview={() => void refreshExtractPromptPreview()}
         onChangeFontSize={setExtractFontSize}
         onSubmit={() => void handleSubmitExtract()}
+      />
+
+      <PipelineSecondReviewDialog
+        open={secondReviewDialogOpen}
+        models={secondReviewModels}
+        loading={secondReviewLoading}
+        submitting={secondReviewSubmitting}
+        selectedModelKey={secondReviewSelectedModelKey}
+        userInstruction={secondReviewUserInstruction}
+        targetTables={secondReviewTargetTables}
+        referenceTables={secondReviewReferenceTables}
+        allowPromptEdit={secondReviewAllowPromptEdit}
+        promptPreview={secondReviewPromptPreview}
+        fontSize={secondReviewFontSize}
+        onClose={() => setSecondReviewDialogOpen(false)}
+        onChangeModelKey={(value) => {
+          setSecondReviewSelectedModelKey(value)
+          if (!secondReviewAllowPromptEdit && value) {
+            void refreshSecondReviewPromptPreview(value)
+          }
+        }}
+        onChangeUserInstruction={setSecondReviewUserInstruction}
+        onToggleTargetTable={handleToggleSecondReviewTargetTable}
+        onToggleReferenceTable={handleToggleSecondReviewReferenceTable}
+        onChangeAllowPromptEdit={setSecondReviewAllowPromptEdit}
+        onChangePromptPreview={setSecondReviewPromptPreview}
+        onRefreshPromptPreview={() => void refreshSecondReviewPromptPreview()}
+        onChangeFontSize={setSecondReviewFontSize}
+        onSubmit={() => void handleSubmitSecondReview()}
       />
     </div>
   )
