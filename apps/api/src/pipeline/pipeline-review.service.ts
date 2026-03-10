@@ -108,6 +108,20 @@ type ExistingRevisionNotesIndex = Record<
   Map<string, RevisionNoteEntry[]>
 >;
 
+type SkeletonTopicMeta = {
+  id: number;
+  topicKey: string;
+  topicName: string;
+  topicType: string;
+  description: string;
+};
+
+type ReviewQualityDiagnostics = {
+  charactersAliasNormalizedCount: number;
+  skeletonTopicWeakItemCount: number;
+  explosionWeakCount: number;
+};
+
 export type PipelineSecondReviewPromptPreviewResponse = {
   promptPreview: string;
   usedModelKey: string;
@@ -195,7 +209,12 @@ export class PipelineReviewService {
 
     const aiJson = await this.callLcAiApi(usedModelKey, promptPreview);
     const topicMap = await this.getEnabledSkeletonTopicMap(novelId);
-    const { normalized, warnings, noteDiagnostics } = this.validateAndNormalizeReviewResult(
+    const {
+      normalized,
+      warnings,
+      noteDiagnostics,
+      qualityDiagnostics,
+    } = this.validateAndNormalizeReviewResult(
       aiJson,
       topicMap,
       targetTables,
@@ -209,6 +228,30 @@ export class PipelineReviewService {
       usedModelKey,
       reviewBatchId,
       reviewedAt,
+    );
+
+    this.logReviewStage(
+      'quality diagnostics',
+      {
+        charactersAliasNormalizedCount:
+          qualityDiagnostics.charactersAliasNormalizedCount,
+        skeletonTopicWeakItemCount: qualityDiagnostics.skeletonTopicWeakItemCount,
+        explosionWeakCount: qualityDiagnostics.explosionWeakCount,
+        reviewNotesByTable: noteDiagnostics.reviewNotesByTable,
+        focusTablesReceivedAiNotes: {
+          novel_characters:
+            (noteDiagnostics.reviewNotesByTable.novel_characters ?? 0) > 0,
+          novel_skeleton_topic_items:
+            (noteDiagnostics.reviewNotesByTable.novel_skeleton_topic_items ??
+              0) > 0,
+          novel_explosions:
+            (noteDiagnostics.reviewNotesByTable.novel_explosions ?? 0) > 0,
+        },
+      },
+      qualityDiagnostics.skeletonTopicWeakItemCount > 0 ||
+        qualityDiagnostics.explosionWeakCount > 0
+        ? 'warn'
+        : 'log',
     );
 
     const { summary, tableDetails } = await this.persistReviewedData(
@@ -319,6 +362,9 @@ export class PipelineReviewService {
       '你不是重新裸生成，而是基于当前数据库中已经生成的结构化结果进行二次审查和纠偏。',
       '请重点完成：核对、补漏、去重、纠偏、强化短剧爆点质量，并让 skeletonTopicItems 真正围绕 topic 定义。',
       '',
+      '【你的角色】',
+      '你是“历史骨架与短剧爆点结构化质检纠偏器”，不是普通润色助手。你必须优先修正结构质量，而不是简单换一种说法复述。',
+      '',
       '【自检规则】',
       '1. 对于未被选中的 targetTables，请返回空数组，不要输出新内容。',
       '2. 对于被选中的 targetTables，请输出修正后的完整数组，后端会覆盖写回所选表。',
@@ -329,6 +375,41 @@ export class PipelineReviewService {
       '7. explosions 要更像短剧爆点，而不是普通摘要。',
       '8. reviewNotes 用于说明本次发现的问题与修正动作。',
       '9. reviewNotes.table 必须使用数据库目标表全名之一：novel_timelines、novel_characters、novel_key_nodes、novel_skeleton_topic_items、novel_explosions。',
+      '',
+      '【characters 强规则】',
+      '1. 必须尽量覆盖主角、核心对手、关键盟友/辅臣、关键阻碍者/内应。',
+      '2. 必须统一人物别名，不允许把多个写法直接拼接在 name 字段里。',
+      '3. faction 要规范化，避免同类阵营出现多种散乱写法。',
+      '4. description 必须回答“此人如何推动剧情”，不能只是泛泛人物介绍。',
+      '5. personality 必须服务剧情推进，不能只有空泛褒义词。',
+      '6. settingWords 要适合后续角色设定/绘图/风格化生成，不要写成长段散文。',
+      '',
+      '【skeletonTopicItems 强规则】',
+      '1. 每组 skeletonTopicItems 必须严格围绕对应 topic 的 topicKey、topicName、topicType、description 作答。',
+      '2. 不允许只是把 drama_source_text 改写成另一段摘要。',
+      '3. 如果 topicType = list，必须拆成多个有区分度的 item，每条都要是独立观点/阶段/原因/结论。',
+      '4. 如果 topicType = text，仍然优先拆成多个 item，从不同分析维度回答该 topic；除非资料极少，否则不要只输出 1 条大段总结。',
+      '5. topicType = text 时，每条 item 至少要回答以下之一：为什么会发生、关键误判是什么、结构性后果是什么、改写抓手在哪里。',
+      '6. 对“过程分析”类 topic，不要按时间顺序平铺流水账，而要提炼转折点、关键博弈、策略变化和因果链。',
+      '7. 对“失败原因分析”类 topic，不要把事件重说一遍，而要拆成可复用的原因维度，例如决策失误、用人问题、军事短板、情报失效、内部背叛。',
+      '8. 每个 item 必须具备分析/提炼价值，而不是原文摘抄；content 至少要体现“结论 + 依据/影响”。',
+      '9. itemTitle 必须像一个分析结论，而不是章节标题；优先使用“削藩策略过急导致燕王提前反叛”这类可直接表达判断的标题。',
+      '10. 严禁大量使用“原因一/阶段一/过程一/内容一”这类空标题。',
+      '11. 如果你发现当前 skeletonTopicItems 仍偏摘要，请主动重写为围绕 topic 定义的分析结果，即使需要压缩原始细节，也要优先保证分析性和针对性。',
+      '',
+      '【explosions 强规则】',
+      '1. 每个 explosion 必须是“短剧可拍的爆点单元”，不是普通历史摘要。',
+      '2. 每条至少体现以下元素中的两项：压迫、反击、反转、翻盘、身份差、权力逆转、生死危机、情绪释放。',
+      '3. title 必须短剧化，不能像教材目录。',
+      '4. sceneRestoration 必须写出角色、场景、动作、冲突，形成画面感。',
+      '5. dramaticQuality 必须明确说明“为什么有戏”，包括冲突点、反转点或情绪爆发点。',
+      '6. adaptability 必须明确说明为什么适合短剧改编，例如单场景强冲突、高反转、低成本可拍、强情绪释放、易形成集尾钩子。',
+      '',
+      '【reviewNotes 强规则】',
+      '1. reviewNotes 不能只写宽泛评价，必须写本轮具体修正动作。',
+      '2. 对 novel_characters：要说明补了哪些关键人物、统一了哪些别名、规范了哪些 faction。',
+      '3. 对 novel_skeleton_topic_items：要说明哪些 topic 原先过于摘要化，以及现在如何改成围绕 topic 定义的提炼结果。',
+      '4. 对 novel_explosions：要说明哪些爆点原先太平，以及现在增强了哪些冲突、反转、画面感或传播钩子。',
       '',
       '【输出要求】',
       '1. 必须输出严格 JSON。',
@@ -677,12 +758,13 @@ export class PipelineReviewService {
 
   private validateAndNormalizeReviewResult(
     aiJson: Record<string, unknown>,
-    topicMap: Map<string, { id: number; topicKey: string }>,
+    topicMap: Map<string, SkeletonTopicMeta>,
     targetTables: PipelineSecondReviewTargetTable[],
   ): {
     normalized: PipelineReviewAiResult;
     warnings: string[];
     noteDiagnostics: ReviewNotesDiagnostics;
+    qualityDiagnostics: ReviewQualityDiagnostics;
   } {
     const requiredKeys = [
       'timelines',
@@ -700,14 +782,21 @@ export class PipelineReviewService {
 
     const warnings: string[] = [];
     const timelines = this.normalizeTimelines(aiJson.timelines as unknown[], warnings);
-    const characters = this.normalizeCharacters(aiJson.characters as unknown[], warnings);
+    const { items: characters, aliasNormalizedCount } = this.normalizeCharacters(
+      aiJson.characters as unknown[],
+      warnings,
+    );
     const keyNodes = this.normalizeKeyNodes(aiJson.keyNodes as unknown[], warnings);
-    const skeletonTopicItems = this.normalizeSkeletonTopicItems(
+    const {
+      groups: skeletonTopicItems,
+      weakItemCount: skeletonTopicWeakItemCount,
+    } = this.normalizeSkeletonTopicItems(
       aiJson.skeletonTopicItems as unknown[],
       topicMap,
       warnings,
     );
-    const explosions = this.normalizeExplosions(aiJson.explosions as unknown[], warnings);
+    const { items: explosions, weakCount: explosionWeakCount } =
+      this.normalizeExplosions(aiJson.explosions as unknown[], warnings);
     const rawReviewNotes = Array.isArray(aiJson.reviewNotes) ? (aiJson.reviewNotes as unknown[]) : [];
     const { reviewNotes, diagnostics: noteDiagnostics } = this.normalizeReviewNotes(
       rawReviewNotes,
@@ -726,6 +815,11 @@ export class PipelineReviewService {
       },
       warnings,
       noteDiagnostics,
+      qualityDiagnostics: {
+        charactersAliasNormalizedCount: aliasNormalizedCount,
+        skeletonTopicWeakItemCount,
+        explosionWeakCount,
+      },
     };
   }
 
@@ -790,7 +884,7 @@ export class PipelineReviewService {
     novelId: number,
     targetTables: PipelineSecondReviewTargetTable[],
     result: PipelineReviewAiResult,
-    topicMap: Map<string, { id: number; topicKey: string }>,
+    topicMap: Map<string, SkeletonTopicMeta>,
     revisionNotesByTable: Map<PipelineSecondReviewTargetTable, RevisionNoteEntry[]>,
     warnings: string[],
   ): Promise<{
@@ -1141,7 +1235,7 @@ export class PipelineReviewService {
   private async insertSkeletonTopicItems(
     novelId: number,
     groups: SkeletonTopicItemGroupInput[],
-    topicMap: Map<string, { id: number; topicKey: string }>,
+    topicMap: Map<string, SkeletonTopicMeta>,
     manager: EntityManager,
     warnings: string[],
     revisionNotes: RevisionNoteEntry[] | null,
@@ -1680,13 +1774,21 @@ export class PipelineReviewService {
     return result;
   }
 
-  private normalizeCharacters(items: unknown[], warnings: string[]): CharacterInput[] {
+  private normalizeCharacters(
+    items: unknown[],
+    warnings: string[],
+  ): { items: CharacterInput[]; aliasNormalizedCount: number } {
     const seen = new Set<string>();
     const result: CharacterInput[] = [];
+    let aliasNormalizedCount = 0;
 
     for (const raw of items) {
       const item = this.asRecord(raw);
-      const name = this.normalizeText(item.name);
+      const normalizedCharacter = this.normalizeCharacterNameAndDescription(
+        item.name,
+        item.description,
+      );
+      const name = normalizedCharacter.name;
       if (!name) {
         warnings.push('Dropped character because name is empty');
         continue;
@@ -1697,16 +1799,19 @@ export class PipelineReviewService {
         continue;
       }
       seen.add(dedupeKey);
+      if (normalizedCharacter.aliasNormalized) {
+        aliasNormalizedCount += 1;
+      }
       result.push({
         name,
         faction: this.normalizeText(item.faction),
-        description: this.normalizeText(item.description),
+        description: normalizedCharacter.description,
         personality: this.normalizeText(item.personality),
         settingWords: this.normalizeText(item.settingWords),
       });
     }
 
-    return result;
+    return { items: result, aliasNormalizedCount };
   }
 
   private normalizeKeyNodes(items: unknown[], warnings: string[]): KeyNodeInput[] {
@@ -1742,10 +1847,11 @@ export class PipelineReviewService {
 
   private normalizeSkeletonTopicItems(
     items: unknown[],
-    topicMap: Map<string, { id: number; topicKey: string }>,
+    topicMap: Map<string, SkeletonTopicMeta>,
     warnings: string[],
-  ): SkeletonTopicItemGroupInput[] {
+  ): { groups: SkeletonTopicItemGroupInput[]; weakItemCount: number } {
     const result: SkeletonTopicItemGroupInput[] = [];
+    let weakItemCount = 0;
 
     for (const raw of items) {
       const group = this.asRecord(raw);
@@ -1763,6 +1869,7 @@ export class PipelineReviewService {
         continue;
       }
 
+      const topicMeta = topicMap.get(topicKey);
       const normalizedItems: SkeletonTopicItemInput[] = [];
       for (const rawItem of group.items) {
         const item = this.asRecord(rawItem);
@@ -1776,6 +1883,10 @@ export class PipelineReviewService {
           continue;
         }
 
+        if (this.isWeakSkeletonTopicItem(itemTitle, content)) {
+          weakItemCount += 1;
+        }
+
         normalizedItems.push({
           itemTitle,
           content,
@@ -1784,15 +1895,41 @@ export class PipelineReviewService {
         });
       }
 
+      if (topicMeta) {
+        const topicType = this.normalizeText(topicMeta.topicType).toLowerCase();
+        if (topicType === 'list' && normalizedItems.length < 2) {
+          warnings.push(
+            `Skeleton topic ${topicKey} 是 list 类型，但当前仅输出 ${normalizedItems.length} 条 item，拆条粒度可能不足`,
+          );
+          weakItemCount += normalizedItems.length || 1;
+        }
+
+        if (
+          topicType === 'text' &&
+          normalizedItems.length > 0 &&
+          normalizedItems.every((item) =>
+            this.isWeakSkeletonTopicItem(item.itemTitle, item.content),
+          )
+        ) {
+          warnings.push(
+            `Skeleton topic ${topicKey} 是 text 类型，但当前内容仍偏空泛摘要，未明显围绕 topic 定义展开`,
+          );
+        }
+      }
+
       result.push({ topicKey, items: normalizedItems });
     }
 
-    return result;
+    return { groups: result, weakItemCount };
   }
 
-  private normalizeExplosions(items: unknown[], warnings: string[]): ExplosionInput[] {
+  private normalizeExplosions(
+    items: unknown[],
+    warnings: string[],
+  ): { items: ExplosionInput[]; weakCount: number } {
     const seen = new Set<string>();
     const result: ExplosionInput[] = [];
+    let weakCount = 0;
 
     for (const raw of items) {
       const item = this.asRecord(raw);
@@ -1808,18 +1945,29 @@ export class PipelineReviewService {
         continue;
       }
       seen.add(dedupeKey);
+      const dramaticQuality = this.normalizeText(item.dramaticQuality);
+      const adaptability = this.normalizeText(item.adaptability);
+      if (
+        this.isWeakExplosionField(dramaticQuality) ||
+        this.isWeakExplosionField(adaptability)
+      ) {
+        weakCount += 1;
+        warnings.push(
+          `Explosion "${title}" 的 dramaticQuality/adaptability 仍偏空泛，建议进一步强化短剧化表达`,
+        );
+      }
       result.push({
         explosionType,
         title,
         subtitle: this.normalizeText(item.subtitle),
         sceneRestoration: this.normalizeText(item.sceneRestoration),
-        dramaticQuality: this.normalizeText(item.dramaticQuality),
-        adaptability: this.normalizeText(item.adaptability),
+        dramaticQuality,
+        adaptability,
         timelineRef: this.normalizeText(item.timelineRef),
       });
     }
 
-    return result;
+    return { items: result, weakCount };
   }
 
   private normalizeJsonValue(
@@ -2112,15 +2260,81 @@ export class PipelineReviewService {
 
   private async getEnabledSkeletonTopicMap(
     novelId: number,
-  ): Promise<Map<string, { id: number; topicKey: string }>> {
+  ): Promise<Map<string, SkeletonTopicMeta>> {
     const rows = await this.listEnabledSkeletonTopics(novelId);
-    const topicMap = new Map<string, { id: number; topicKey: string }>();
+    const topicMap = new Map<string, SkeletonTopicMeta>();
     for (const row of rows) {
       const topicKey = this.normalizeText(row.topic_key).toLowerCase();
       if (!topicKey) continue;
-      topicMap.set(topicKey, { id: Number(row.id), topicKey });
+      topicMap.set(topicKey, {
+        id: Number(row.id),
+        topicKey,
+        topicName: this.normalizeText(row.topic_name),
+        topicType: this.normalizeText(row.topic_type),
+        description: this.normalizeText(row.description),
+      });
     }
     return topicMap;
+  }
+
+  private normalizeCharacterNameAndDescription(
+    rawName: unknown,
+    rawDescription: unknown,
+  ): { name: string; description: string; aliasNormalized: boolean } {
+    const name = this.normalizeText(rawName);
+    const description = this.normalizeText(rawDescription);
+    if (!/[\/／]/.test(name)) {
+      return { name, description, aliasNormalized: false };
+    }
+
+    const parts = name
+      .split(/[\/／]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!parts.length) {
+      return { name: '', description, aliasNormalized: false };
+    }
+
+    const [primaryName, ...aliases] = parts;
+    const uniqueAliases = [...new Set(aliases.filter((alias) => alias !== primaryName))];
+    if (!uniqueAliases.length) {
+      return { name: primaryName, description, aliasNormalized: true };
+    }
+
+    const aliasPrefix = `别名：${uniqueAliases.join('、')}。`;
+    return {
+      name: primaryName,
+      description: description.startsWith(aliasPrefix)
+        ? description
+        : `${aliasPrefix}${description}`.trim(),
+      aliasNormalized: true,
+    };
+  }
+
+  private isWeakSkeletonTopicItem(itemTitle: string, content: string): boolean {
+    const genericTitlePattern =
+      /^(过程|阶段|原因|结论|内容|条目|项目|分析)[一二三四五六七八九十0-9]*$/;
+    if (itemTitle && genericTitlePattern.test(itemTitle)) {
+      return true;
+    }
+    return this.normalizeText(content).length > 0 && this.normalizeText(content).length < 30;
+  }
+
+  private isWeakExplosionField(value: string): boolean {
+    const text = this.normalizeText(value);
+    if (!text || text.length < 12) {
+      return true;
+    }
+    const genericPhrases = [
+      '很有戏剧性',
+      '戏剧性很强',
+      '适合短剧',
+      '适合改编',
+      '冲突强',
+      '有爽点',
+      '有反转',
+    ];
+    return genericPhrases.some((phrase) => text === phrase);
   }
 
   private getLcApiEndpoint(): string {

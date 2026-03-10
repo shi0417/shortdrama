@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS novel_source_segments (
+  id INT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+  novel_id INT NOT NULL COMMENT 'Drama novel id',
+  source_text_id INT NOT NULL COMMENT 'Source text row id',
+  segment_index INT NOT NULL COMMENT 'Segment order within one source text',
+  chapter_label VARCHAR(128) NULL COMMENT 'Detected chapter label such as 第一章 / 第壹部 / 附录 / 题记',
+  title_hint VARCHAR(255) NULL COMMENT 'Detected title hint near the segment',
+  start_offset INT NOT NULL COMMENT 'Start offset in normalized source text',
+  end_offset INT NOT NULL COMMENT 'End offset in normalized source text',
+  char_length INT NOT NULL COMMENT 'Segment character length',
+  content_text LONGTEXT NOT NULL COMMENT 'Evidence segment raw text',
+  keyword_text TEXT NULL COMMENT 'Lightweight extracted keywords for retrieval',
+  is_active TINYINT(1) NOT NULL DEFAULT 1 COMMENT '1=active',
+  version INT NOT NULL DEFAULT 1 COMMENT 'Version of regenerated segments',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Created time',
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Updated time',
+  PRIMARY KEY (id),
+  KEY idx_nss_novel_active_segment (novel_id, is_active, segment_index),
+  KEY idx_nss_source_active_segment (source_text_id, is_active, segment_index),
+  KEY idx_nss_novel_active_chapter (novel_id, is_active, chapter_label),
+  CONSTRAINT fk_nss_novel FOREIGN KEY (novel_id) REFERENCES drama_novels(id) ON DELETE CASCADE,
+  CONSTRAINT fk_nss_source_text FOREIGN KEY (source_text_id) REFERENCES drama_source_text(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Source text evidence segments for worldview retrieval';

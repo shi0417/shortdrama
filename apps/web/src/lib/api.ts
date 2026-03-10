@@ -1,3 +1,5 @@
+import type { GenerateSourceSegmentsResponse, SourceSegmentsSummary } from '@/types'
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000'
 
 type ApiErrorPayload = {
@@ -243,6 +245,15 @@ export const api = {
   deleteSourceText: (id: number) => apiClient(`/source-texts/${id}`, {
     method: 'DELETE',
   }),
+
+  getSourceSegmentsSummary: (novelId: number) =>
+    apiClient(`/novels/${novelId}/source-segments/summary`) as Promise<SourceSegmentsSummary>,
+
+  generateSourceSegments: (novelId: number, payload?: { forceRegenerate?: boolean }) =>
+    apiClient(`/novels/${novelId}/source-segments/generate`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }) as Promise<GenerateSourceSegmentsResponse>,
 
   // Episodes
   getEpisodes: (novelId: number) => apiClient(`/episodes?novelId=${novelId}`) as Promise<EpisodeResponseDto[]>,

@@ -42,3 +42,36 @@ export interface SourceTextChunk {
   totalLength: number
   text: string
 }
+
+export interface SourceSegmentsSummaryItem {
+  sourceTextId: number
+  segmentCount: number
+  chapterCount: number
+  version: number | null
+  latestGeneratedAt: string | null
+}
+
+export interface SourceSegmentsSummary {
+  novelId: number
+  hasActiveSegments: boolean
+  activeSegments: number
+  sourceTextCount: number
+  activeVersion: number | null
+  latestGeneratedAt: string | null
+  sources: SourceSegmentsSummaryItem[]
+}
+
+export interface GenerateSourceSegmentsResponse {
+  novelId: number
+  sourceTextCount: number
+  generatedSegments: number
+  skippedSegments: number
+  version: number
+  warnings?: string[]
+  bySourceText: Array<{
+    sourceTextId: number
+    contentLength: number
+    generatedSegments: number
+    skippedSegments: number
+  }>
+}

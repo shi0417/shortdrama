@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { SourceText } from '@/types'
+import { SourceSegmentsSummary, SourceText } from '@/types'
 import { api } from '@/lib/api'
 
 interface SourceTextManagerProps {
@@ -16,11 +16,14 @@ export default function SourceTextManager({ novelId }: SourceTextManagerProps) {
   const [totalLength, setTotalLength] = useState(0)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [segmentsSummary, setSegmentsSummary] = useState<SourceSegmentsSummary | null>(null)
+  const [generatingSegments, setGeneratingSegments] = useState(false)
 
   const CHUNK_SIZE = 5000
 
   useEffect(() => {
     loadSourceTexts()
+    loadSegmentsSummary()
   }, [novelId])
 
   const loadSourceTexts = async () => {
@@ -32,13 +35,49 @@ export default function SourceTextManager({ novelId }: SourceTextManagerProps) {
     }
   }
 
+  const loadSegmentsSummary = async () => {
+    try {
+      const data = await api.getSourceSegmentsSummary(novelId)
+      setSegmentsSummary(data)
+    } catch (error: any) {
+      if (!String(error?.message || '').includes('404')) {
+        console.error('Failed to load source segments summary:', error)
+      }
+      setSegmentsSummary(null)
+    }
+  }
+
   const handleCreate = async () => {
     try {
       await api.createSourceText(novelId)
       await loadSourceTexts()
+      await loadSegmentsSummary()
       alert('New reference material created')
     } catch (error: any) {
       alert('Failed to create: ' + error.message)
+    }
+  }
+
+  const handleGenerateSegments = async () => {
+    const confirmed = confirm(
+      '将基于当前原始素材做规则切片，不调用 AI 模型，仅供世界观检索使用。是否继续？'
+    )
+    if (!confirmed) {
+      return
+    }
+
+    try {
+      setGeneratingSegments(true)
+      const result = await api.generateSourceSegments(novelId, { forceRegenerate: true })
+      await loadSegmentsSummary()
+      const warningText = result.warnings?.length ? `\n提示：${result.warnings.join('；')}` : ''
+      alert(
+        `素材切片生成完成\n生成 segments：${result.generatedSegments}\n跳过片段：${result.skippedSegments}\n版本：${result.version}${warningText}`
+      )
+    } catch (error: any) {
+      alert('生成素材切片失败: ' + error.message)
+    } finally {
+      setGeneratingSegments(false)
     }
   }
 
@@ -99,6 +138,7 @@ export default function SourceTextManager({ novelId }: SourceTextManagerProps) {
     try {
       await api.deleteSourceText(id)
       await loadSourceTexts()
+      await loadSegmentsSummary()
       if (selectedId === id) {
         setSelectedId(null)
         setLoadedText('')
@@ -135,6 +175,43 @@ export default function SourceTextManager({ novelId }: SourceTextManagerProps) {
           >
             + New Material
           </button>
+          <button
+            onClick={handleGenerateSegments}
+            disabled={generatingSegments || sourceTexts.length === 0}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              background: generatingSegments ? '#91d5ff' : '#1890ff',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: generatingSegments || sourceTexts.length === 0 ? 'not-allowed' : 'pointer',
+              marginTop: '8px',
+            }}
+          >
+            {generatingSegments ? '生成中...' : '生成素材切片'}
+          </button>
+          <div
+            style={{
+              marginTop: '8px',
+              padding: '8px',
+              background: '#fafafa',
+              border: '1px solid #f0f0f0',
+              borderRadius: '4px',
+              fontSize: '12px',
+              color: '#666',
+              lineHeight: 1.6,
+            }}
+          >
+            <div>当前 active segments：{segmentsSummary?.activeSegments ?? 0}</div>
+            <div>是否已建立切片：{segmentsSummary?.hasActiveSegments ? '是' : '否'}</div>
+            <div>
+              最近生成：
+              {segmentsSummary?.latestGeneratedAt
+                ? new Date(segmentsSummary.latestGeneratedAt).toLocaleString()
+                : '暂无'}
+            </div>
+          </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {sourceTexts.length === 0 ? (

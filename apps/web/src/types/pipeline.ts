@@ -180,3 +180,193 @@ export interface PipelineExtractCommitResponse {
     skeletonTopicItemsDropped: number
   }
 }
+
+export type PipelineWorldviewReferenceTable =
+  | 'drama_novels'
+  | 'drama_source_text'
+  | 'novel_adaptation_strategy'
+  | 'adaptation_modes'
+  | 'set_core'
+  | 'novel_timelines'
+  | 'novel_characters'
+  | 'novel_key_nodes'
+  | 'novel_skeleton_topics'
+  | 'novel_skeleton_topic_items'
+  | 'novel_explosions'
+
+export interface PipelineWorldviewReferenceSummaryItem {
+  table: PipelineWorldviewReferenceTable
+  label: string
+  rowCount: number
+  fields: string[]
+  usedChars?: number
+  originalChars?: number
+  note?: string
+  segmentCount?: number
+  chapterCount?: number
+  usedFallback?: boolean
+  moduleEvidenceCount?: Record<string, number>
+}
+
+export interface PipelineWorldviewEvidenceSummary {
+  evidenceSegments: number
+  coverageChapters: number
+  evidenceChars: number
+  fallbackUsed: boolean
+  moduleEvidenceCount: Record<string, number>
+}
+
+export type PipelineWorldviewQualityModuleKey =
+  | 'payoff'
+  | 'opponents'
+  | 'power'
+  | 'traitor'
+  | 'story_phase'
+
+export type PipelineWorldviewQualitySeverity = 'bad' | 'weak'
+
+export interface PipelineWorldviewQualityWarning {
+  moduleKey: PipelineWorldviewQualityModuleKey
+  path: string
+  severity: PipelineWorldviewQualitySeverity
+  reason: string
+}
+
+export interface PipelineWorldviewQualitySummary {
+  totalIssues: number
+  badCount: number
+  weakCount: number
+  byModule: Record<PipelineWorldviewQualityModuleKey, { bad: number; weak: number }>
+}
+
+export interface PipelineWorldviewLineDraft {
+  line_key: string
+  line_name: string
+  line_content: string
+  start_ep: number | null
+  end_ep: number | null
+  stage_text: string | null
+  sort_order: number
+}
+
+export interface PipelineWorldviewOpponentDraft {
+  level_name: string
+  opponent_name: string
+  threat_type: string | null
+  detailed_desc: string | null
+  sort_order: number
+}
+
+export interface PipelineWorldviewPowerLadderDraft {
+  level_no: number
+  level_title: string
+  identity_desc: string
+  ability_boundary: string
+  start_ep: number | null
+  end_ep: number | null
+  sort_order: number
+}
+
+export interface PipelineWorldviewTraitorDraft {
+  name: string
+  public_identity: string | null
+  real_identity: string | null
+  mission: string | null
+  threat_desc: string | null
+  sort_order: number
+}
+
+export interface PipelineWorldviewTraitorStageDraft {
+  stage_title: string
+  stage_desc: string
+  start_ep: number | null
+  end_ep: number | null
+  sort_order: number
+}
+
+export interface PipelineWorldviewStoryPhaseDraft {
+  phase_name: string
+  start_ep: number | null
+  end_ep: number | null
+  historical_path: string | null
+  rewrite_path: string | null
+  sort_order: number
+}
+
+export interface PipelineWorldviewDraft {
+  setPayoffArch: {
+    name: string
+    notes: string
+    lines: PipelineWorldviewLineDraft[]
+  }
+  setOpponentMatrix: {
+    name: string
+    description: string
+    opponents: PipelineWorldviewOpponentDraft[]
+  }
+  setPowerLadder: PipelineWorldviewPowerLadderDraft[]
+  setTraitorSystem: {
+    name: string
+    description: string
+    traitors: PipelineWorldviewTraitorDraft[]
+    stages: PipelineWorldviewTraitorStageDraft[]
+  }
+  setStoryPhases: PipelineWorldviewStoryPhaseDraft[]
+}
+
+export interface PipelineWorldviewRequest {
+  modelKey?: string
+  referenceTables: PipelineWorldviewReferenceTable[]
+  userInstruction?: string
+  allowPromptEdit?: boolean
+  promptOverride?: string
+  sourceTextCharBudget?: number
+}
+
+export interface PipelineWorldviewPreviewResponse {
+  promptPreview: string
+  usedModelKey: string
+  referenceTables: PipelineWorldviewReferenceTable[]
+  referenceSummary: PipelineWorldviewReferenceSummaryItem[]
+  evidenceSummary?: PipelineWorldviewEvidenceSummary
+  qualitySummary?: PipelineWorldviewQualitySummary
+  qualityWarnings?: PipelineWorldviewQualityWarning[]
+  warnings?: string[]
+}
+
+export interface PipelineWorldviewGenerateDraftResponse {
+  usedModelKey: string
+  promptPreview: string
+  referenceTables: PipelineWorldviewReferenceTable[]
+  referenceSummary: PipelineWorldviewReferenceSummaryItem[]
+  evidenceSummary?: PipelineWorldviewEvidenceSummary
+  qualitySummary?: PipelineWorldviewQualitySummary
+  qualityWarnings?: PipelineWorldviewQualityWarning[]
+  draft: PipelineWorldviewDraft
+  warnings?: string[]
+  normalizationWarnings?: string[]
+  validationWarnings?: string[]
+}
+
+export interface PipelineWorldviewPersistPayload {
+  draft: PipelineWorldviewDraft
+}
+
+export interface PipelineWorldviewPersistResponse {
+  ok: true
+  summary: {
+    payoffArch: number
+    payoffLines: number
+    opponentMatrix: number
+    opponents: number
+    powerLadder: number
+    traitorSystem: number
+    traitors: number
+    traitorStages: number
+    storyPhases: number
+  }
+  qualitySummary?: PipelineWorldviewQualitySummary
+  qualityWarnings?: PipelineWorldviewQualityWarning[]
+  normalizationWarnings?: string[]
+  validationWarnings?: string[]
+}

@@ -12,7 +12,13 @@ import { PipelineService } from './pipeline.service';
 import { PipelineExtractService } from './pipeline-extract.service';
 import { PipelineExtractDto } from './dto/pipeline-extract.dto';
 import { PipelineSecondReviewDto } from './dto/pipeline-second-review.dto';
+import {
+  PipelineWorldviewGenerateDraftDto,
+  PipelineWorldviewPersistDto,
+  PipelineWorldviewPreviewDto,
+} from './dto/pipeline-worldview.dto';
 import { PipelineReviewService } from './pipeline-review.service';
+import { PipelineWorldviewService } from './pipeline-worldview.service';
 
 @Controller('pipeline')
 @UseGuards(JwtAuthGuard)
@@ -21,6 +27,7 @@ export class PipelineController {
     private readonly pipelineService: PipelineService,
     private readonly pipelineExtractService: PipelineExtractService,
     private readonly pipelineReviewService: PipelineReviewService,
+    private readonly pipelineWorldviewService: PipelineWorldviewService,
   ) {}
 
   @Get(':novelId/overview')
@@ -58,5 +65,29 @@ export class PipelineController {
     @Body() dto: PipelineSecondReviewDto,
   ) {
     return this.pipelineReviewService.reviewAndCorrect(novelId, dto);
+  }
+
+  @Post(':novelId/worldview-preview-prompt')
+  previewWorldviewPrompt(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: PipelineWorldviewPreviewDto,
+  ) {
+    return this.pipelineWorldviewService.previewPrompt(novelId, dto);
+  }
+
+  @Post(':novelId/worldview-generate-draft')
+  generateWorldviewDraft(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: PipelineWorldviewGenerateDraftDto,
+  ) {
+    return this.pipelineWorldviewService.generateDraft(novelId, dto);
+  }
+
+  @Post(':novelId/worldview-persist')
+  persistWorldviewDraft(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: PipelineWorldviewPersistDto,
+  ) {
+    return this.pipelineWorldviewService.persistDraft(novelId, dto);
   }
 }

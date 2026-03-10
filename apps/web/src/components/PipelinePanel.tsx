@@ -1,14 +1,22 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { api, PipelineOverviewDto } from '@/lib/api'
 import { setCoreApi } from '@/lib/set-core-api'
 import { pipelineAiApi } from '@/lib/pipeline-ai-api'
 import { pipelineReviewApi } from '@/lib/pipeline-review-api'
+import { pipelineWorldviewApi } from '@/lib/pipeline-worldview-api'
 import {
   AiModelOptionDto,
   EnhanceSetCoreCurrentFields,
   PipelineExtractReferenceTable,
+  PipelineWorldviewDraft,
+  PipelineWorldviewEvidenceSummary,
+  PipelineWorldviewQualitySummary,
+  PipelineWorldviewQualityWarning,
+  PipelineWorldviewReferenceSummaryItem,
+  PipelineWorldviewReferenceTable,
   SetCoreVersionDto,
   UpsertSetCorePayload,
 } from '@/types/pipeline'
@@ -22,6 +30,8 @@ import SetCoreEditor from './pipeline/SetCoreEditor'
 import SetCoreEnhanceDialog from './pipeline/SetCoreEnhanceDialog'
 import PipelineExtractDialog from './pipeline/PipelineExtractDialog'
 import PipelineSecondReviewDialog from './pipeline/PipelineSecondReviewDialog'
+import PipelineWorldviewDialog from './pipeline/PipelineWorldviewDialog'
+import PipelineDataSection from './pipeline/PipelineDataSection'
 
 interface PipelinePanelProps {
   novelId: number
@@ -70,7 +80,48 @@ const defaultSecondReviewReferenceTables: PipelineSecondReviewReferenceTable[] =
   'set_core',
 ]
 
+const defaultWorldviewReferenceTables: PipelineWorldviewReferenceTable[] = [
+  'drama_novels',
+  'novel_adaptation_strategy',
+  'adaptation_modes',
+  'set_core',
+  'novel_timelines',
+  'novel_characters',
+  'novel_key_nodes',
+  'novel_skeleton_topics',
+  'novel_skeleton_topic_items',
+  'novel_explosions',
+]
+
+const worldviewDefaultModelCandidates = [
+  'claude-3-7-sonnet-20250219',
+  'claude-3-5-sonnet-20241022',
+  'claude-3-5-sonnet-20240620',
+  'chatgpt-4o-latest',
+]
+
+function isSafeWorldviewModel(model: AiModelOptionDto): boolean {
+  const key = (model.modelKey || '').toLowerCase()
+  const provider = (model.provider || '').toLowerCase()
+  const family = (model.family || '').toLowerCase()
+  const modality = (model.modality || '').toLowerCase()
+
+  if (key.includes('imagine') || key.includes('midjourney')) return false
+  if (provider.includes('midjourney')) return false
+  if (modality && modality !== 'text') return false
+
+  return (
+    key.includes('claude') ||
+    key.includes('gpt') ||
+    key.includes('deepseek') ||
+    family.includes('claude') ||
+    family.includes('gpt') ||
+    family.includes('deepseek')
+  )
+}
+
 export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps) {
+  const router = useRouter()
   const [step1Expanded, setStep1Expanded] = useState(true)
   const [step2Expanded, setStep2Expanded] = useState(true)
   const [step3Expanded, setStep3Expanded] = useState(true)
@@ -105,6 +156,7 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [characters, setCharacters] = useState<Record<string, any>[]>([])
   const [keyNodes, setKeyNodes] = useState<Record<string, any>[]>([])
   const [explosions, setExplosions] = useState<Record<string, any>[]>([])
+  const [skeletonTopics, setSkeletonTopics] = useState<PipelineOverviewDto['skeletonTopics']>([])
   const [worldview, setWorldview] = useState<PipelineOverviewDto['worldview']>({
     core: [],
     payoffArch: [],
@@ -152,6 +204,33 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [secondReviewUserInstruction, setSecondReviewUserInstruction] = useState('')
   const [secondReviewSelectedModelKey, setSecondReviewSelectedModelKey] = useState('')
   const [secondReviewFontSize, setSecondReviewFontSize] = useState(14)
+  const [worldviewDialogOpen, setWorldviewDialogOpen] = useState(false)
+  const [worldviewModels, setWorldviewModels] = useState<AiModelOptionDto[]>([])
+  const [worldviewLoading, setWorldviewLoading] = useState(false)
+  const [worldviewGenerating, setWorldviewGenerating] = useState(false)
+  const [worldviewPersisting, setWorldviewPersisting] = useState(false)
+  const [worldviewSelectedModelKey, setWorldviewSelectedModelKey] = useState('')
+  const [worldviewReferenceTables, setWorldviewReferenceTables] =
+    useState<PipelineWorldviewReferenceTable[]>(defaultWorldviewReferenceTables)
+  const [worldviewUserInstruction, setWorldviewUserInstruction] = useState('')
+  const [worldviewAllowPromptEdit, setWorldviewAllowPromptEdit] = useState(false)
+  const [worldviewPromptPreview, setWorldviewPromptPreview] = useState('')
+  const [worldviewFontSize, setWorldviewFontSize] = useState(14)
+  const [worldviewSourceTextCharBudget, setWorldviewSourceTextCharBudget] = useState(20000)
+  const [worldviewReferenceSummary, setWorldviewReferenceSummary] = useState<
+    PipelineWorldviewReferenceSummaryItem[]
+  >([])
+  const [worldviewEvidenceSummary, setWorldviewEvidenceSummary] =
+    useState<PipelineWorldviewEvidenceSummary | null>(null)
+  const [worldviewQualitySummary, setWorldviewQualitySummary] =
+    useState<PipelineWorldviewQualitySummary | null>(null)
+  const [worldviewQualityWarnings, setWorldviewQualityWarnings] = useState<
+    PipelineWorldviewQualityWarning[]
+  >([])
+  const [worldviewDraft, setWorldviewDraft] = useState<PipelineWorldviewDraft | null>(null)
+  const [worldviewWarnings, setWorldviewWarnings] = useState<string[]>([])
+  const [worldviewNormalizationWarnings, setWorldviewNormalizationWarnings] = useState<string[]>([])
+  const [worldviewValidationWarnings, setWorldviewValidationWarnings] = useState<string[]>([])
 
   const loadOverview = async () => {
     try {
@@ -162,6 +241,7 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       setCharacters(data.characters || [])
       setKeyNodes(data.keyNodes || [])
       setExplosions(data.explosions || [])
+      setSkeletonTopics(data.skeletonTopics || [])
       setWorldview(
         data.worldview || {
           core: [],
@@ -433,6 +513,156 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       alert(err?.message || '二次AI自检失败')
     } finally {
       setSecondReviewSubmitting(false)
+    }
+  }
+
+  const loadWorldviewModels = async () => {
+    const models = await pipelineAiApi.listAiModelOptions()
+    const safeModels = (models || []).filter(isSafeWorldviewModel)
+    setWorldviewModels(safeModels)
+    return safeModels
+  }
+
+  const refreshWorldviewPromptPreview = async (modelKey?: string) => {
+    const resolvedModelKey = modelKey || worldviewSelectedModelKey
+    if (!resolvedModelKey) {
+      return
+    }
+
+    try {
+      setWorldviewLoading(true)
+      const preview = await pipelineWorldviewApi.previewWorldviewPrompt(novelId, {
+        modelKey: resolvedModelKey,
+        referenceTables: worldviewReferenceTables,
+        userInstruction: worldviewUserInstruction || undefined,
+        allowPromptEdit: worldviewAllowPromptEdit,
+        promptOverride:
+          worldviewAllowPromptEdit && worldviewPromptPreview.trim()
+            ? worldviewPromptPreview
+            : undefined,
+        sourceTextCharBudget: worldviewSourceTextCharBudget,
+      })
+      setWorldviewPromptPreview(preview.promptPreview || '')
+      setWorldviewReferenceSummary(preview.referenceSummary || [])
+      setWorldviewEvidenceSummary(preview.evidenceSummary || null)
+      setWorldviewQualitySummary(preview.qualitySummary || null)
+      setWorldviewQualityWarnings(preview.qualityWarnings || [])
+      setWorldviewWarnings(preview.warnings || [])
+      if (!worldviewSelectedModelKey && preview.usedModelKey) {
+        setWorldviewSelectedModelKey(preview.usedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '生成世界观 Prompt 预览失败')
+    } finally {
+      setWorldviewLoading(false)
+    }
+  }
+
+  const handleOpenWorldviewDialog = async () => {
+    try {
+      setWorldviewDialogOpen(true)
+      setWorldviewDraft(null)
+      setWorldviewNormalizationWarnings([])
+      setWorldviewValidationWarnings([])
+      setWorldviewEvidenceSummary(null)
+      setWorldviewQualitySummary(null)
+      setWorldviewQualityWarnings([])
+
+      let resolvedModelKey = worldviewSelectedModelKey
+      let models = worldviewModels
+      if (!models.length) {
+        models = await loadWorldviewModels()
+      }
+      if (!models.length) {
+        alert('未找到适合世界观结构化输出的稳定文本模型，请联系管理员检查模型配置')
+        return
+      }
+      if (resolvedModelKey && !models.some((item) => item.modelKey === resolvedModelKey)) {
+        resolvedModelKey = ''
+      }
+      if (!resolvedModelKey && models.length) {
+        const preferred =
+          worldviewDefaultModelCandidates.find((candidate) =>
+            models.some((item) => item.modelKey === candidate)
+          ) || models[0].modelKey
+        resolvedModelKey = preferred
+        setWorldviewSelectedModelKey(resolvedModelKey)
+      }
+      if (!worldviewReferenceTables.length) {
+        setWorldviewReferenceTables(defaultWorldviewReferenceTables)
+      }
+      if (resolvedModelKey) {
+        await refreshWorldviewPromptPreview(resolvedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '打开世界观提炼弹窗失败')
+    }
+  }
+
+  const handleToggleWorldviewReferenceTable = (table: PipelineWorldviewReferenceTable) => {
+    setWorldviewReferenceTables((prev) =>
+      prev.includes(table) ? prev.filter((item) => item !== table) : [...prev, table]
+    )
+  }
+
+  const handleGenerateWorldviewDraft = async () => {
+    if (!worldviewSelectedModelKey) {
+      alert('请选择 AI 模型')
+      return
+    }
+
+    try {
+      setWorldviewGenerating(true)
+      const result = await pipelineWorldviewApi.generateWorldviewDraft(novelId, {
+        modelKey: worldviewSelectedModelKey,
+        referenceTables: worldviewReferenceTables,
+        userInstruction: worldviewUserInstruction || undefined,
+        allowPromptEdit: worldviewAllowPromptEdit,
+        promptOverride:
+          worldviewAllowPromptEdit && worldviewPromptPreview.trim()
+            ? worldviewPromptPreview
+            : undefined,
+        sourceTextCharBudget: worldviewSourceTextCharBudget,
+      })
+      setWorldviewPromptPreview(result.promptPreview || worldviewPromptPreview)
+      setWorldviewReferenceSummary(result.referenceSummary || [])
+      setWorldviewEvidenceSummary(result.evidenceSummary || null)
+      setWorldviewQualitySummary(result.qualitySummary || null)
+      setWorldviewQualityWarnings(result.qualityWarnings || [])
+      setWorldviewDraft(result.draft || null)
+      setWorldviewWarnings(result.warnings || [])
+      setWorldviewNormalizationWarnings(result.normalizationWarnings || [])
+      setWorldviewValidationWarnings(result.validationWarnings || [])
+    } catch (err: any) {
+      alert(err?.message || '生成世界观草稿失败')
+    } finally {
+      setWorldviewGenerating(false)
+    }
+  }
+
+  const handlePersistWorldviewDraft = async () => {
+    if (!worldviewDraft) {
+      alert('请先生成世界观草稿')
+      return
+    }
+
+    try {
+      setWorldviewPersisting(true)
+      const result = await pipelineWorldviewApi.persistWorldviewDraft(novelId, {
+        draft: worldviewDraft,
+      })
+      setWorldviewNormalizationWarnings(result.normalizationWarnings || [])
+      setWorldviewValidationWarnings(result.validationWarnings || [])
+      setWorldviewQualitySummary(result.qualitySummary || null)
+      setWorldviewQualityWarnings(result.qualityWarnings || [])
+      await loadOverview()
+      alert(
+        `世界观写入成功\n爽点架构：${result.summary.payoffArch}\n爽点线：${result.summary.payoffLines}\n对手矩阵：${result.summary.opponentMatrix}\n对手明细：${result.summary.opponents}\n权力阶梯：${result.summary.powerLadder}\n内鬼系统：${result.summary.traitorSystem}\n内鬼角色：${result.summary.traitors}\n内鬼阶段：${result.summary.traitorStages}\n故事阶段：${result.summary.storyPhases}`
+      )
+    } catch (err: any) {
+      alert(err?.message || '写入世界观草稿失败')
+    } finally {
+      setWorldviewPersisting(false)
     }
   }
 
@@ -927,6 +1157,18 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         getSetCoreSaveMode() === 'new_version' ? '新建版本' : '更新当前激活版本'
       }），并刷新 Step3 数据。`
 
+  const skeletonTopicItemRows = useMemo(() => {
+    return skeletonTopics.flatMap((topic) =>
+      (topic.items || []).map((item) => ({
+        ...item,
+        topic_id: topic.id,
+        topic_key: topic.topic_key,
+        topic_name: topic.topic_name,
+        topic_type: topic.topic_type,
+      }))
+    )
+  }, [skeletonTopics])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={{ fontSize: '20px', fontWeight: 600, color: '#333' }}>
@@ -969,30 +1211,49 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
               - 保存到 `novel_key_nodes`
             </label>
             <div style={{ marginLeft: '20px', marginTop: '4px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>骨架分析主题（可配置）</div>
+              <button
+                onClick={() => router.push(`/projects/${novelId}/pipeline/skeleton-topics`)}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  padding: 0,
+                  fontWeight: 600,
+                  marginBottom: '6px',
+                  color: '#1890ff',
+                  cursor: 'pointer',
+                }}
+              >
+                骨架分析主题（可配置）
+              </button>
               <SkeletonTopicsPanel novelId={novelId} refreshKey={extractRefreshKey} />
             </div>
             <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
               后端只读查询并展示已存在数据（本阶段不写库）
             </div>
-            <div style={{ marginTop: '10px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>时间线列表</div>
-              {renderSimpleTable(timelines)}
-            </div>
-            <div style={{ marginTop: '10px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>人物列表</div>
-              {renderSimpleTable(characters)}
-            </div>
-            <div style={{ marginTop: '10px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>关键节点列表</div>
-              {renderSimpleTable(keyNodes)}
-            </div>
-            <div style={{ marginTop: '10px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>骨架主题抽取结果（Topic Items）</div>
-              <div style={{ color: '#999', fontSize: '13px' }}>
-                请在上方“骨架分析主题（可配置）”中使用 Expand Items 查看各主题下的 items。
-              </div>
-            </div>
+            <PipelineDataSection
+              novelId={novelId}
+              resource="timelines"
+              rows={timelines}
+              onRefresh={loadOverview}
+            />
+            <PipelineDataSection
+              novelId={novelId}
+              resource="characters"
+              rows={characters}
+              onRefresh={loadOverview}
+            />
+            <PipelineDataSection
+              novelId={novelId}
+              resource="key-nodes"
+              rows={keyNodes}
+              onRefresh={loadOverview}
+            />
+            <PipelineDataSection
+              novelId={novelId}
+              resource="skeleton-topic-items"
+              rows={skeletonTopicItemRows}
+              onRefresh={loadOverview}
+            />
           </div>
         )}
       </div>
@@ -1022,10 +1283,12 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
               <input type="checkbox" checked={stepChecks.explosions} onChange={() => handleStepCheck('explosions')} /> 识别爆点
               - 保存到 `novel_explosions`
             </label>
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>爆点列表</div>
-              {renderSimpleTable(explosions)}
-            </div>
+            <PipelineDataSection
+              novelId={novelId}
+              resource="explosions"
+              rows={explosions}
+              onRefresh={loadOverview}
+            />
           </div>
         )}
       </div>
@@ -1077,6 +1340,20 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
             }}
           >
             二次AI自检
+          </button>
+          <button
+            onClick={() => void handleOpenWorldviewDialog()}
+            style={{
+              padding: '6px 12px',
+              border: 'none',
+              borderRadius: '4px',
+              background: '#1890ff',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            提炼短剧世界观
           </button>
         </div>
       </div>
@@ -1290,6 +1567,44 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         onRefreshPromptPreview={() => void refreshSecondReviewPromptPreview()}
         onChangeFontSize={setSecondReviewFontSize}
         onSubmit={() => void handleSubmitSecondReview()}
+      />
+      <PipelineWorldviewDialog
+        open={worldviewDialogOpen}
+        models={worldviewModels}
+        loading={worldviewLoading}
+        generating={worldviewGenerating}
+        persisting={worldviewPersisting}
+        selectedModelKey={worldviewSelectedModelKey}
+        referenceTables={worldviewReferenceTables}
+        userInstruction={worldviewUserInstruction}
+        allowPromptEdit={worldviewAllowPromptEdit}
+        promptPreview={worldviewPromptPreview}
+        fontSize={worldviewFontSize}
+        sourceTextCharBudget={worldviewSourceTextCharBudget}
+        referenceSummary={worldviewReferenceSummary}
+        evidenceSummary={worldviewEvidenceSummary}
+        qualitySummary={worldviewQualitySummary}
+        qualityWarnings={worldviewQualityWarnings}
+        draft={worldviewDraft}
+        warnings={worldviewWarnings}
+        normalizationWarnings={worldviewNormalizationWarnings}
+        validationWarnings={worldviewValidationWarnings}
+        onClose={() => setWorldviewDialogOpen(false)}
+        onChangeModelKey={(value) => {
+          setWorldviewSelectedModelKey(value)
+          if (!worldviewAllowPromptEdit && value) {
+            void refreshWorldviewPromptPreview(value)
+          }
+        }}
+        onToggleReferenceTable={handleToggleWorldviewReferenceTable}
+        onChangeUserInstruction={setWorldviewUserInstruction}
+        onChangeAllowPromptEdit={setWorldviewAllowPromptEdit}
+        onChangePromptPreview={setWorldviewPromptPreview}
+        onChangeFontSize={setWorldviewFontSize}
+        onChangeSourceTextCharBudget={setWorldviewSourceTextCharBudget}
+        onRefreshPromptPreview={() => void refreshWorldviewPromptPreview()}
+        onGenerateDraft={() => void handleGenerateWorldviewDraft()}
+        onPersistDraft={() => void handlePersistWorldviewDraft()}
       />
     </div>
   )
