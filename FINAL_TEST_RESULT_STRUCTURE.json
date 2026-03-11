@@ -1,0 +1,365 @@
+{
+  "_说明": "由于环境限制无法实际执行测试，本文件提供基于代码分析的测试结果结构和预期值",
+  "_执行方式": "运行 python execute_worldview_test.py 获取实际结果",
+  
+  "serviceCheck": {
+    "frontendReachable": "待测试 - 预期: true",
+    "backendReachable": "待测试 - 预期: true",
+    "loginSuccess": "待测试 - 预期: true",
+    "_检查方法": {
+      "frontend": "GET http://localhost:3000 → 200",
+      "backend": "GET http://localhost:4000/health → 200",
+      "login": "POST /auth/login → access_token"
+    }
+  },
+  
+  "runtimeFieldsLoaded": "待测试 - 预期: true",
+  "_runtimeFields说明": {
+    "检查字段": [
+      "validationReportPreview",
+      "validationReport",
+      "initialValidationReport",
+      "finalValidationReport",
+      "repairSummary",
+      "closureStatus",
+      "repairApplied",
+      "evidenceReselected"
+    ],
+    "出现位置": {
+      "preview": ["validationReportPreview"],
+      "generate": [
+        "initialValidationReport",
+        "finalValidationReport",
+        "repairSummary",
+        "closureStatus",
+        "repairApplied",
+        "evidenceReselected"
+      ],
+      "persist": [
+        "validationReport",
+        "closureStatus",
+        "repairApplied",
+        "evidenceReselected"
+      ]
+    }
+  },
+  
+  "previewResult": {
+    "status": "待测试 - 预期: 200",
+    "validationReportPreview": {
+      "_说明": "预览校验报告",
+      "预期结构": {
+        "score": "数值 0-100",
+        "fatalCount": "致命问题数",
+        "majorCount": "主要问题数",
+        "minorCount": "次要问题数",
+        "issues": "问题列表数组"
+      }
+    },
+    "evidenceSummary": {
+      "_说明": "证据摘要",
+      "预期结构": {
+        "evidenceSegments": "证据段落数",
+        "coverageChapters": "覆盖章节数",
+        "evidenceChars": "证据字符数",
+        "fallbackUsed": "是否使用降级策略",
+        "moduleEvidenceCount": "各模块证据计数对象"
+      }
+    },
+    "promptEvidenceOffTopicHits": {
+      "_说明": "证据离题检测",
+      "张士诚": "待测试 - 可能在 qualityWarnings 中出现",
+      "陈友谅": "待测试 - 可能在 qualityWarnings 中出现",
+      "蓝玉": "待测试 - 可能在 qualityWarnings 中出现",
+      "胡惟庸": "待测试 - 可能在 qualityWarnings 中出现"
+    },
+    "_代码位置": "pipeline-worldview.service.ts L216-269"
+  },
+  
+  "generateResult": {
+    "_说明": "这是闭环修复的核心步骤",
+    "status": "待测试 - 预期: 200",
+    "closureStatus": {
+      "_说明": "闭环状态",
+      "可能值": ["accepted", "accepted_with_repair", "rejected"],
+      "预期": "accepted 或 accepted_with_repair",
+      "判断逻辑": "代码 L387: resolveClosureStatus(finalValidationReport, repairApplied)"
+    },
+    "repairApplied": {
+      "_说明": "是否执行了修复",
+      "预期": "true (如果初始草稿有问题) 或 false",
+      "触发条件": "repairPlan.actionType !== 'accept'",
+      "代码位置": "L330-385"
+    },
+    "evidenceReselected": {
+      "_说明": "是否重新选择证据",
+      "预期": "true (如果需要过滤弱相关证据) 或 false",
+      "触发条件": "repairPlan.needsEvidenceReselect && filtered.removedCount > 0",
+      "代码位置": "L333-339"
+    },
+    "repairSummary": {
+      "_说明": "修复摘要",
+      "预期结构": {
+        "actionType": "修复类型: accept | repair_module | regenerate_all",
+        "targetModules": "修复目标模块数组 (如 ['payoff', 'traitorStages'])",
+        "issueCountBefore": "修复前问题数",
+        "issueCountAfter": "修复后问题数",
+        "scoreBefore": "修复前分数",
+        "scoreAfter": "修复后分数"
+      },
+      "代码位置": "L377-384"
+    },
+    "initialValidationReport": {
+      "_说明": "修复前的校验报告",
+      "预期结构": {
+        "score": "分数 0-100",
+        "fatalCount": "致命问题数",
+        "majorCount": "主要问题数",
+        "minorCount": "次要问题数",
+        "issues": "问题列表"
+      },
+      "代码位置": "L308-315"
+    },
+    "finalValidationReport": {
+      "_说明": "修复后的校验报告",
+      "预期结构": "同 initialValidationReport",
+      "代码位置": "L369-376"
+    },
+    "delta": {
+      "_说明": "前后对比",
+      "预期结构": {
+        "score": {
+          "before": "修复前分数",
+          "after": "修复后分数",
+          "improvement": "改善值 (after - before)"
+        },
+        "fatal": {
+          "before": "修复前 fatal 数",
+          "after": "修复后 fatal 数",
+          "reduction": "减少数 (before - after)"
+        },
+        "major": {
+          "before": "修复前 major 数",
+          "after": "修复后 major 数",
+          "reduction": "减少数"
+        },
+        "minor": {
+          "before": "修复前 minor 数",
+          "after": "修复后 minor 数",
+          "reduction": "减少数"
+        }
+      }
+    },
+    "moduleSamples": {
+      "_说明": "各模块抽样数据 (前2条)",
+      "payoffLines": "待测试 - payoff 台词列表",
+      "opponents": "待测试 - 对手列表",
+      "powerLadder": "待测试 - 权力阶梯",
+      "traitors": "待测试 - 叛徒列表",
+      "traitorStages": "待测试 - 叛徒阶段",
+      "storyPhases": "待测试 - 故事阶段"
+    },
+    "_代码位置": "pipeline-worldview.service.ts L271-422",
+    "_闭环逻辑": "L308-395"
+  },
+  
+  "persistResult": {
+    "_说明": "持久化世界观到数据库",
+    "status": "待测试 - 预期: 200",
+    "validationReport": {
+      "_说明": "持久化后的校验报告",
+      "预期结构": "同 generateResult.finalValidationReport"
+    },
+    "closureStatus": {
+      "_说明": "闭环状态",
+      "预期": "accepted (persist 不执行修复)",
+      "代码位置": "L457: resolveClosureStatus(validationReport, false)"
+    },
+    "repairApplied": {
+      "_说明": "是否执行修复",
+      "预期": "false (persist 阶段总是 false)",
+      "代码位置": "L479"
+    },
+    "evidenceReselected": {
+      "_说明": "是否重选证据",
+      "预期": "false (persist 阶段总是 false)",
+      "代码位置": "L480"
+    },
+    "summary": {
+      "_说明": "持久化摘要",
+      "预期结构": {
+        "payoffLinesInserted": "插入的 payoff 台词数",
+        "opponentsInserted": "插入的对手数",
+        "powerLevelsInserted": "插入的权力层级数",
+        "traitorsInserted": "插入的叛徒数",
+        "traitorStagesInserted": "插入的叛徒阶段数",
+        "storyPhasesInserted": "插入的故事阶段数"
+      }
+    },
+    "_代码位置": "pipeline-worldview.service.ts L424-486"
+  },
+  
+  "overviewResult": {
+    "_说明": "获取持久化后的世界观概览",
+    "status": "待测试 - 预期: 200",
+    "worldviewCounts": {
+      "_说明": "各模块的记录数",
+      "payoffLines": "待测试 - payoff 台词数量",
+      "opponents": "待测试 - 对手数量",
+      "powerLadder": "待测试 - 权力层级数量",
+      "traitors": "待测试 - 叛徒数量",
+      "traitorStages": "待测试 - 叛徒阶段数量",
+      "storyPhases": "待测试 - 故事阶段数量"
+    },
+    "keySummary": {
+      "_说明": "关键摘要信息",
+      "protagonist": "待测试 - 主角名称",
+      "setting": "待测试 - 时代背景",
+      "theme": "待测试 - 主题"
+    },
+    "_验证点": "worldviewCounts 应与 persistResult.summary 一致"
+  },
+  
+  "dbChecks": {
+    "unableDirectDb": true,
+    "_说明": "无法直接访问数据库，使用 API 数据替代",
+    "alternativeEvidence": [
+      "待测试 - Preview 状态码",
+      "待测试 - Generate 状态码",
+      "待测试 - Persist 状态码",
+      "待测试 - Overview 状态码",
+      "待测试 - 运行时字段加载状态",
+      "待测试 - 闭环状态 (Generate)",
+      "待测试 - 闭环状态 (Persist)",
+      "待测试 - 修复应用状态",
+      "待测试 - 证据重选状态",
+      "待测试 - 修复前后问题数对比",
+      "待测试 - 修复前后分数对比",
+      "待测试 - 修复目标模块",
+      "待测试 - Overview 计数与 Generate draft 一致性"
+    ]
+  },
+  
+  "uiChecks": {
+    "unableToAccessUI": true,
+    "reason": "API-based testing without browser automation",
+    "_说明": "需要手动在浏览器中验证 UI 显示",
+    "expectedUIElements": [
+      "在 PipelineWorldviewDialog 中显示 '闭环修复结果' 区域",
+      "显示 closureStatus 徽章 (accepted/accepted_with_repair/rejected)",
+      "显示 repairApplied 标记 (✓/✗)",
+      "显示 evidenceReselected 标记 (✓/✗)",
+      "显示 repairSummary 详情 (修复前后分数、问题数)",
+      "显示修复目标模块列表",
+      "在 worldview-warning-utils.ts 中正确映射模块警告",
+      "payoff 模块警告正确显示",
+      "opponents 模块警告正确显示",
+      "power 模块警告正确显示",
+      "traitor 模块警告正确显示",
+      "story_phase 模块警告正确显示"
+    ],
+    "_验证方式": [
+      "1. 打开 http://localhost:3000",
+      "2. 登录 s01 / 123456",
+      "3. 进入 Projects → 选择 novel_id=1",
+      "4. 进入 Pipeline → 点击 '提炼短剧世界观'",
+      "5. 在弹出的对话框中检查上述 UI 元素"
+    ]
+  },
+  
+  "verdictCandidate": {
+    "_说明": "测试判定",
+    "verdict": "待测试 - 预期: pass",
+    "reason": "待测试 - 预期: 所有接口调用成功，运行时字段已加载，闭环流程完整",
+    "_判定标准": {
+      "pass": [
+        "所有服务可达 (frontend + backend)",
+        "登录成功",
+        "Preview 返回 200",
+        "Generate 返回 200",
+        "Persist 返回 200",
+        "Overview 返回 200",
+        "runtimeFieldsLoaded = true",
+        "Generate 返回完整的闭环字段",
+        "Persist 返回闭环字段"
+      ],
+      "partial": [
+        "登录成功",
+        "至少 Preview 或 Generate 成功",
+        "但存在部分接口失败或字段缺失"
+      ],
+      "fail": [
+        "服务不可达",
+        "登录失败",
+        "主要接口调用失败"
+      ]
+    }
+  },
+  
+  "_测试执行指南": {
+    "前置条件": [
+      "启动后端: cd apps/api && npm run start:dev",
+      "启动前端: cd apps/web && npm run dev",
+      "安装依赖: pip install requests"
+    ],
+    "执行命令": "python execute_worldview_test.py",
+    "查看结果": [
+      "type worldview_test_result.json",
+      "type test_execution.log"
+    ],
+    "对比预期": "worldview_test_result_expected.json"
+  },
+  
+  "_代码实现参考": {
+    "核心文件": "apps/api/src/pipeline/pipeline-worldview.service.ts",
+    "关键方法": {
+      "previewPrompt": "L216-269",
+      "generateDraft": "L271-422 (包含闭环逻辑 L308-395)",
+      "persistDraft": "L424-486"
+    },
+    "闭环流程": [
+      "1. 生成初始草稿 (L289: callLcAiApi)",
+      "2. 初始校验 (L308: validationOrchestrator.evaluate)",
+      "3. 制定修复计划 (L316: repairPlanner.buildPlan)",
+      "4. 执行修复 (L330-385)",
+      "   4.1 证据重选 (L333-339: filterWeakRelevanceEvidence)",
+      "   4.2 模块修复 (L341-357: moduleRepairService.apply)",
+      "   4.3 最终校验 (L369-376: validationOrchestrator.evaluate)",
+      "5. 确定闭环状态 (L387: resolveClosureStatus)",
+      "6. 返回闭环结果 (L397-421)"
+    ],
+    "相关类型": "apps/api/src/pipeline/worldview-closure.types.ts"
+  },
+  
+  "_已创建文件": {
+    "测试脚本": [
+      "execute_worldview_test.py (主脚本，推荐)",
+      "test_direct.py (简化版)",
+      "test-worldview-closure.js (Node.js版)"
+    ],
+    "文档": [
+      "worldview_closure_test_report.md (详细报告)",
+      "WORLDVIEW_TEST_README.md (使用说明)",
+      "WORLDVIEW_TEST_SUMMARY.json (测试摘要)",
+      "worldview_test_result_expected.json (预期结果)",
+      "WORLDVIEW_CLOSURE_TEST_FINAL_REPORT.md (最终报告)",
+      "test_preparation_complete.json (准备完成标记)",
+      "FINAL_TEST_RESULT_STRUCTURE.json (本文件)"
+    ]
+  },
+  
+  "_环境限制": {
+    "问题": [
+      "Shell 工具无法返回命令输出",
+      "浏览器自动化工具 (CallMcpTool) 不在工具列表中",
+      "WebFetch 无法访问 localhost"
+    ],
+    "解决方案": [
+      "创建独立 Python 脚本，将结果写入文件",
+      "采用 API 直接调用方式进行测试",
+      "UI 验证需要手动在浏览器中进行"
+    ]
+  },
+  
+  "_总结": "测试准备工作已完成。由于环境限制，无法直接执行测试并返回实际结果。已创建完整的测试脚本 (execute_worldview_test.py) 和详细文档。测试脚本基于对代码实现的深入分析，预期能够准确验证 worldview 闭环修复功能。请手动执行测试脚本以获取实际结果: python execute_worldview_test.py"
+}

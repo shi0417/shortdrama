@@ -160,6 +160,209 @@ const RESOURCE_CONFIG: Record<PipelineResourceName, ResourceConfig> = {
     jsonFields: ['content_json'],
     orderBy: 'sort_order ASC, id ASC',
   },
+  'payoff-arch': {
+    tableName: 'set_payoff_arch',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'name',
+      'notes',
+      'version',
+      'is_active',
+      'created_at',
+      'updated_at',
+    ],
+    editableFields: ['name', 'notes', 'version', 'is_active'],
+    numericFields: ['version'],
+    booleanFields: ['is_active'],
+    orderBy: 'id ASC',
+  },
+  'payoff-lines': {
+    tableName: 'set_payoff_lines',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'payoff_arch_id',
+      'line_key',
+      'line_name',
+      'line_content',
+      'start_ep',
+      'end_ep',
+      'stage_text',
+      'sort_order',
+      'created_at',
+      'updated_at',
+    ],
+    editableFields: [
+      'payoff_arch_id',
+      'line_key',
+      'line_name',
+      'line_content',
+      'start_ep',
+      'end_ep',
+      'stage_text',
+      'sort_order',
+    ],
+    numericFields: ['payoff_arch_id', 'start_ep', 'end_ep', 'sort_order'],
+    orderBy: 'sort_order ASC, id ASC',
+  },
+  'opponent-matrix': {
+    tableName: 'set_opponent_matrix',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'name',
+      'description',
+      'version',
+      'is_active',
+      'created_at',
+      'updated_at',
+    ],
+    editableFields: ['name', 'description', 'version', 'is_active'],
+    numericFields: ['version'],
+    booleanFields: ['is_active'],
+    orderBy: 'id ASC',
+  },
+  opponents: {
+    tableName: 'set_opponents',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'opponent_matrix_id',
+      'level_name',
+      'opponent_name',
+      'threat_type',
+      'detailed_desc',
+      'sort_order',
+      'created_at',
+    ],
+    editableFields: [
+      'opponent_matrix_id',
+      'level_name',
+      'opponent_name',
+      'threat_type',
+      'detailed_desc',
+      'sort_order',
+    ],
+    numericFields: ['opponent_matrix_id', 'sort_order'],
+    orderBy: 'sort_order ASC, id ASC',
+  },
+  'power-ladder': {
+    tableName: 'set_power_ladder',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'level_no',
+      'level_title',
+      'identity_desc',
+      'ability_boundary',
+      'start_ep',
+      'end_ep',
+      'sort_order',
+      'created_at',
+    ],
+    editableFields: [
+      'level_no',
+      'level_title',
+      'identity_desc',
+      'ability_boundary',
+      'start_ep',
+      'end_ep',
+      'sort_order',
+    ],
+    numericFields: ['level_no', 'start_ep', 'end_ep', 'sort_order'],
+    orderBy: 'sort_order ASC, id ASC',
+  },
+  'traitor-system': {
+    tableName: 'set_traitor_system',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'name',
+      'description',
+      'version',
+      'is_active',
+      'created_at',
+    ],
+    editableFields: ['name', 'description', 'version', 'is_active'],
+    numericFields: ['version'],
+    booleanFields: ['is_active'],
+    orderBy: 'id ASC',
+  },
+  traitors: {
+    tableName: 'set_traitors',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'traitor_system_id',
+      'name',
+      'public_identity',
+      'real_identity',
+      'mission',
+      'threat_desc',
+      'sort_order',
+      'created_at',
+    ],
+    editableFields: [
+      'traitor_system_id',
+      'name',
+      'public_identity',
+      'real_identity',
+      'mission',
+      'threat_desc',
+      'sort_order',
+    ],
+    numericFields: ['traitor_system_id', 'sort_order'],
+    orderBy: 'sort_order ASC, id ASC',
+  },
+  'traitor-stages': {
+    tableName: 'set_traitor_stages',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'traitor_system_id',
+      'stage_title',
+      'stage_desc',
+      'start_ep',
+      'end_ep',
+      'sort_order',
+      'created_at',
+    ],
+    editableFields: [
+      'traitor_system_id',
+      'stage_title',
+      'stage_desc',
+      'start_ep',
+      'end_ep',
+      'sort_order',
+    ],
+    numericFields: ['traitor_system_id', 'start_ep', 'end_ep', 'sort_order'],
+    orderBy: 'sort_order ASC, id ASC',
+  },
+  'story-phases': {
+    tableName: 'set_story_phases',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'phase_name',
+      'start_ep',
+      'end_ep',
+      'historical_path',
+      'rewrite_path',
+      'sort_order',
+      'created_at',
+    ],
+    editableFields: [
+      'phase_name',
+      'start_ep',
+      'end_ep',
+      'historical_path',
+      'rewrite_path',
+      'sort_order',
+    ],
+    numericFields: ['start_ep', 'end_ep', 'sort_order'],
+    orderBy: 'sort_order ASC, id ASC',
+  },
 };
 
 @Injectable()
@@ -232,6 +435,29 @@ export class PipelineResourceService {
         await this.assertTimelineBelongsToNovel(timelineId, novelId);
       }
     }
+    if (resource === 'payoff-lines') {
+      const payoffArchId = normalized.payoff_arch_id as number | null | undefined;
+      if (!payoffArchId) {
+        throw new BadRequestException('payoff_arch_id is required for payoff-lines');
+      }
+      await this.assertPayoffArchBelongsToNovel(payoffArchId, novelId);
+    }
+    if (resource === 'opponents') {
+      const matrixId = normalized.opponent_matrix_id as number | null | undefined;
+      if (!matrixId) {
+        throw new BadRequestException('opponent_matrix_id is required for opponents');
+      }
+      await this.assertOpponentMatrixBelongsToNovel(matrixId, novelId);
+    }
+    if (resource === 'traitors' || resource === 'traitor-stages') {
+      const traitorSystemId = normalized.traitor_system_id as number | null | undefined;
+      if (!traitorSystemId) {
+        throw new BadRequestException(
+          'traitor_system_id is required for traitors/traitor-stages',
+        );
+      }
+      await this.assertTraitorSystemBelongsToNovel(traitorSystemId, novelId);
+    }
 
     if ('sort_order' in this.fieldsToObject(config.editableFields) && normalized.sort_order === undefined) {
       normalized.sort_order = 0;
@@ -291,6 +517,32 @@ export class PipelineResourceService {
       if (timelineId) {
         await this.assertTimelineBelongsToNovel(timelineId, novelId);
       }
+    }
+    if (resource === 'payoff-lines' && fields.includes('payoff_arch_id')) {
+      const payoffArchId = normalized.payoff_arch_id as number | null | undefined;
+      if (!payoffArchId) {
+        throw new BadRequestException('payoff_arch_id is required for payoff-lines');
+      }
+      await this.assertPayoffArchBelongsToNovel(payoffArchId, novelId);
+    }
+    if (resource === 'opponents' && fields.includes('opponent_matrix_id')) {
+      const matrixId = normalized.opponent_matrix_id as number | null | undefined;
+      if (!matrixId) {
+        throw new BadRequestException('opponent_matrix_id is required for opponents');
+      }
+      await this.assertOpponentMatrixBelongsToNovel(matrixId, novelId);
+    }
+    if (
+      (resource === 'traitors' || resource === 'traitor-stages') &&
+      fields.includes('traitor_system_id')
+    ) {
+      const traitorSystemId = normalized.traitor_system_id as number | null | undefined;
+      if (!traitorSystemId) {
+        throw new BadRequestException(
+          'traitor_system_id is required for traitors/traitor-stages',
+        );
+      }
+      await this.assertTraitorSystemBelongsToNovel(traitorSystemId, novelId);
     }
 
     const assignments = fields.map((field) => `${field} = ?`).join(', ');
@@ -463,6 +715,51 @@ export class PipelineResourceService {
     if (!rows.length) {
       throw new NotFoundException(
         `Timeline ${timelineId} does not belong to novel ${novelId}`,
+      );
+    }
+  }
+
+  private async assertPayoffArchBelongsToNovel(
+    payoffArchId: number,
+    novelId: number,
+  ): Promise<void> {
+    const rows = await this.dataSource.query(
+      `SELECT id FROM set_payoff_arch WHERE id = ? AND novel_id = ? LIMIT 1`,
+      [payoffArchId, novelId],
+    );
+    if (!rows.length) {
+      throw new NotFoundException(
+        `Payoff arch ${payoffArchId} does not belong to novel ${novelId}`,
+      );
+    }
+  }
+
+  private async assertOpponentMatrixBelongsToNovel(
+    opponentMatrixId: number,
+    novelId: number,
+  ): Promise<void> {
+    const rows = await this.dataSource.query(
+      `SELECT id FROM set_opponent_matrix WHERE id = ? AND novel_id = ? LIMIT 1`,
+      [opponentMatrixId, novelId],
+    );
+    if (!rows.length) {
+      throw new NotFoundException(
+        `Opponent matrix ${opponentMatrixId} does not belong to novel ${novelId}`,
+      );
+    }
+  }
+
+  private async assertTraitorSystemBelongsToNovel(
+    traitorSystemId: number,
+    novelId: number,
+  ): Promise<void> {
+    const rows = await this.dataSource.query(
+      `SELECT id FROM set_traitor_system WHERE id = ? AND novel_id = ? LIMIT 1`,
+      [traitorSystemId, novelId],
+    );
+    if (!rows.length) {
+      throw new NotFoundException(
+        `Traitor system ${traitorSystemId} does not belong to novel ${novelId}`,
       );
     }
   }

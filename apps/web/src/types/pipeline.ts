@@ -223,6 +223,10 @@ export type PipelineWorldviewQualityModuleKey =
   | 'traitor'
   | 'story_phase'
 
+export type PipelineWorldviewClosureModuleKey =
+  | PipelineWorldviewQualityModuleKey
+  | 'evidence'
+
 export type PipelineWorldviewQualitySeverity = 'bad' | 'weak'
 
 export interface PipelineWorldviewQualityWarning {
@@ -237,6 +241,41 @@ export interface PipelineWorldviewQualitySummary {
   badCount: number
   weakCount: number
   byModule: Record<PipelineWorldviewQualityModuleKey, { bad: number; weak: number }>
+}
+
+export interface PipelineWorldviewInferenceSummary {
+  storyPhase: {
+    storyPhaseIntervalsInferred: number
+    storyPhaseIntervalsAdjusted: number
+    notes: string[]
+  }
+  payoff: {
+    payoffIntervalsInferred: number
+    payoffIntervalsAdjusted: number
+    notes: string[]
+  }
+  power: {
+    powerIntervalsInferred: number
+    powerIntervalsAdjusted: number
+    notes: string[]
+  }
+  traitorStage: {
+    traitorStageIntervalsInferred: number
+    traitorStageIntervalsAdjusted: number
+    notes: string[]
+  }
+}
+
+export interface PipelineWorldviewAlignmentSummary {
+  totalIssues: number
+  byModule: Record<PipelineWorldviewQualityModuleKey, number>
+}
+
+export interface PipelineWorldviewAlignmentWarning {
+  moduleKey: PipelineWorldviewQualityModuleKey
+  path: string
+  severity: PipelineWorldviewQualitySeverity
+  reason: string
 }
 
 export interface PipelineWorldviewLineDraft {
@@ -331,6 +370,10 @@ export interface PipelineWorldviewPreviewResponse {
   evidenceSummary?: PipelineWorldviewEvidenceSummary
   qualitySummary?: PipelineWorldviewQualitySummary
   qualityWarnings?: PipelineWorldviewQualityWarning[]
+  inferenceSummary?: PipelineWorldviewInferenceSummary
+  alignmentSummary?: PipelineWorldviewAlignmentSummary
+  alignmentWarnings?: PipelineWorldviewAlignmentWarning[]
+  validationReportPreview?: PipelineWorldviewValidationReport
   warnings?: string[]
 }
 
@@ -342,6 +385,16 @@ export interface PipelineWorldviewGenerateDraftResponse {
   evidenceSummary?: PipelineWorldviewEvidenceSummary
   qualitySummary?: PipelineWorldviewQualitySummary
   qualityWarnings?: PipelineWorldviewQualityWarning[]
+  inferenceSummary?: PipelineWorldviewInferenceSummary
+  alignmentSummary?: PipelineWorldviewAlignmentSummary
+  alignmentWarnings?: PipelineWorldviewAlignmentWarning[]
+  validationReport?: PipelineWorldviewValidationReport
+  initialValidationReport?: PipelineWorldviewValidationReport
+  finalValidationReport?: PipelineWorldviewValidationReport
+  repairSummary?: PipelineWorldviewRepairSummary
+  closureStatus?: PipelineWorldviewClosureStatus
+  repairApplied?: boolean
+  evidenceReselected?: boolean
   draft: PipelineWorldviewDraft
   warnings?: string[]
   normalizationWarnings?: string[]
@@ -367,6 +420,47 @@ export interface PipelineWorldviewPersistResponse {
   }
   qualitySummary?: PipelineWorldviewQualitySummary
   qualityWarnings?: PipelineWorldviewQualityWarning[]
+  inferenceSummary?: PipelineWorldviewInferenceSummary
+  alignmentSummary?: PipelineWorldviewAlignmentSummary
+  alignmentWarnings?: PipelineWorldviewAlignmentWarning[]
   normalizationWarnings?: string[]
   validationWarnings?: string[]
+  validationReport?: PipelineWorldviewValidationReport
+  closureStatus?: PipelineWorldviewClosureStatus
+  repairApplied?: boolean
+  evidenceReselected?: boolean
+}
+
+export type PipelineWorldviewValidationSeverity = 'fatal' | 'major' | 'minor'
+export type PipelineWorldviewValidationSource = 'structure' | 'semantic' | 'relevance' | 'alignment'
+export type PipelineWorldviewRepairStrategy = 'fix_in_place' | 'regenerate_module' | 'reselect_evidence'
+export type PipelineWorldviewClosureStatus = 'accepted' | 'repaired' | 'low_confidence'
+export type PipelineWorldviewRepairActionType = 'accept' | 'repair' | 'regenerate_modules'
+
+export interface PipelineWorldviewValidationIssue {
+  moduleKey: PipelineWorldviewClosureModuleKey
+  path: string
+  severity: PipelineWorldviewValidationSeverity
+  reason: string
+  repairStrategy: PipelineWorldviewRepairStrategy
+  source: PipelineWorldviewValidationSource
+}
+
+export interface PipelineWorldviewValidationReport {
+  passed: boolean
+  score: number
+  fatalCount: number
+  majorCount: number
+  minorCount: number
+  issues: PipelineWorldviewValidationIssue[]
+  recommendedAction: 'accept' | 'repair' | 'regenerate_modules' | 'reselect_evidence'
+}
+
+export interface PipelineWorldviewRepairSummary {
+  actionType: PipelineWorldviewRepairActionType
+  targetModules: PipelineWorldviewClosureModuleKey[]
+  issueCountBefore: number
+  issueCountAfter: number
+  scoreBefore: number
+  scoreAfter: number
 }

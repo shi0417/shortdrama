@@ -8,6 +8,15 @@ export const allowedPipelineResources = [
   'explosions',
   'skeleton-topics',
   'skeleton-topic-items',
+  'payoff-arch',
+  'payoff-lines',
+  'opponent-matrix',
+  'opponents',
+  'power-ladder',
+  'traitor-system',
+  'traitors',
+  'traitor-stages',
+  'story-phases',
 ] as const;
 
 export type PipelineResourceName = (typeof allowedPipelineResources)[number];

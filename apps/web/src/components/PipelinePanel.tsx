@@ -12,14 +12,21 @@ import {
   EnhanceSetCoreCurrentFields,
   PipelineExtractReferenceTable,
   PipelineWorldviewDraft,
+  PipelineWorldviewAlignmentSummary,
+  PipelineWorldviewAlignmentWarning,
   PipelineWorldviewEvidenceSummary,
+  PipelineWorldviewInferenceSummary,
+  PipelineWorldviewRepairSummary,
   PipelineWorldviewQualitySummary,
   PipelineWorldviewQualityWarning,
   PipelineWorldviewReferenceSummaryItem,
   PipelineWorldviewReferenceTable,
+  PipelineWorldviewValidationReport,
+  PipelineWorldviewClosureStatus,
   SetCoreVersionDto,
   UpsertSetCorePayload,
 } from '@/types/pipeline'
+import { PipelineResourceName } from '@/types/pipeline-resource'
 import {
   PipelineSecondReviewReferenceTable,
   PipelineSecondReviewTargetTable,
@@ -40,13 +47,57 @@ interface PipelinePanelProps {
 
 type ModuleAction = 'generate' | 'edit' | 'save'
 
-const modules = [
+type Step3ModuleConfig = {
+  key:
+    | 'set_core'
+    | 'set_payoff'
+    | 'set_opponent'
+    | 'set_power_ladder'
+    | 'set_traitor'
+    | 'set_story_phases'
+  title: string
+  mapping: string
+  primaryResource?: PipelineResourceName
+  resources?: PipelineResourceName[]
+}
+
+const modules: Step3ModuleConfig[] = [
   { key: 'set_core', title: '1 核心设定', mapping: 'set_core' },
-  { key: 'set_payoff', title: '2 核心爽点架构', mapping: 'set_payoff_arch / set_payoff_lines' },
-  { key: 'set_opponent', title: '3 对手矩阵', mapping: 'set_opponent_matrix / set_opponents' },
-  { key: 'set_power_ladder', title: '4 权力升级阶梯', mapping: 'set_power_ladder' },
-  { key: 'set_traitor', title: '5 内鬼系统', mapping: 'set_traitor_system / set_traitors / set_traitor_stages' },
-  { key: 'set_story_phases', title: '6 故事发展阶段', mapping: 'set_story_phases' },
+  {
+    key: 'set_payoff',
+    title: '2 核心爽点架构',
+    mapping: 'payoff-arch / payoff-lines',
+    primaryResource: 'payoff-arch',
+    resources: ['payoff-arch', 'payoff-lines'],
+  },
+  {
+    key: 'set_opponent',
+    title: '3 对手矩阵',
+    mapping: 'opponent-matrix / opponents',
+    primaryResource: 'opponent-matrix',
+    resources: ['opponent-matrix', 'opponents'],
+  },
+  {
+    key: 'set_power_ladder',
+    title: '4 权力升级阶梯',
+    mapping: 'power-ladder',
+    primaryResource: 'power-ladder',
+    resources: ['power-ladder'],
+  },
+  {
+    key: 'set_traitor',
+    title: '5 内鬼系统',
+    mapping: 'traitor-system / traitors / traitor-stages',
+    primaryResource: 'traitor-system',
+    resources: ['traitor-system', 'traitors', 'traitor-stages'],
+  },
+  {
+    key: 'set_story_phases',
+    title: '6 故事发展阶段',
+    mapping: 'story-phases',
+    primaryResource: 'story-phases',
+    resources: ['story-phases'],
+  },
 ]
 
 const defaultEnhanceReferenceTables = [
@@ -168,6 +219,12 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [expandedDataLists, setExpandedDataLists] = useState<Record<string, boolean>>({
     set_core: true,
   })
+  const [expandedStep3Modules, setExpandedStep3Modules] = useState<Record<string, boolean>>(
+    () =>
+      Object.fromEntries(
+        modules.map((item) => [item.key, true])
+      ) as Record<string, boolean>
+  )
   const [setCoreEnhanceDialogOpen, setSetCoreEnhanceDialogOpen] = useState(false)
   const [enhanceModels, setEnhanceModels] = useState<AiModelOptionDto[]>([])
   const [enhanceLoading, setEnhanceLoading] = useState(false)
@@ -222,12 +279,33 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   >([])
   const [worldviewEvidenceSummary, setWorldviewEvidenceSummary] =
     useState<PipelineWorldviewEvidenceSummary | null>(null)
+  const [worldviewInferenceSummary, setWorldviewInferenceSummary] =
+    useState<PipelineWorldviewInferenceSummary | null>(null)
   const [worldviewQualitySummary, setWorldviewQualitySummary] =
     useState<PipelineWorldviewQualitySummary | null>(null)
   const [worldviewQualityWarnings, setWorldviewQualityWarnings] = useState<
     PipelineWorldviewQualityWarning[]
   >([])
+  const [worldviewAlignmentSummary, setWorldviewAlignmentSummary] =
+    useState<PipelineWorldviewAlignmentSummary | null>(null)
+  const [worldviewAlignmentWarnings, setWorldviewAlignmentWarnings] = useState<
+    PipelineWorldviewAlignmentWarning[]
+  >([])
   const [worldviewDraft, setWorldviewDraft] = useState<PipelineWorldviewDraft | null>(null)
+  const [worldviewValidationReportPreview, setWorldviewValidationReportPreview] =
+    useState<PipelineWorldviewValidationReport | null>(null)
+  const [worldviewValidationReport, setWorldviewValidationReport] =
+    useState<PipelineWorldviewValidationReport | null>(null)
+  const [worldviewInitialValidationReport, setWorldviewInitialValidationReport] =
+    useState<PipelineWorldviewValidationReport | null>(null)
+  const [worldviewFinalValidationReport, setWorldviewFinalValidationReport] =
+    useState<PipelineWorldviewValidationReport | null>(null)
+  const [worldviewRepairSummary, setWorldviewRepairSummary] =
+    useState<PipelineWorldviewRepairSummary | null>(null)
+  const [worldviewClosureStatus, setWorldviewClosureStatus] =
+    useState<PipelineWorldviewClosureStatus | null>(null)
+  const [worldviewRepairApplied, setWorldviewRepairApplied] = useState(false)
+  const [worldviewEvidenceReselected, setWorldviewEvidenceReselected] = useState(false)
   const [worldviewWarnings, setWorldviewWarnings] = useState<string[]>([])
   const [worldviewNormalizationWarnings, setWorldviewNormalizationWarnings] = useState<string[]>([])
   const [worldviewValidationWarnings, setWorldviewValidationWarnings] = useState<string[]>([])
@@ -267,8 +345,47 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     setStepChecks((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
+  const getModuleConfig = (module: string) =>
+    modules.find((item) => item.key === module)
+
+  const openResourceManager = (resource: PipelineResourceName) => {
+    router.push(`/projects/${novelId}/pipeline/${resource}`)
+  }
+
+  const toggleStep3Module = (module: string) => {
+    setExpandedStep3Modules((prev) => ({
+      ...prev,
+      [module]: !prev[module],
+    }))
+  }
+
   const handleModuleAction = (module: string, action: ModuleAction) => {
-    console.log({ module, action, novelId, novelName })
+    if (module === 'set_core') {
+      if (action === 'save') {
+        handleSetCoreSave()
+        return
+      }
+      if (action === 'edit') {
+        void toggleEditor('set_core')
+        return
+      }
+      if (action === 'generate') {
+        void handleOpenEnhanceDialog()
+      }
+      return
+    }
+
+    const moduleConfig = getModuleConfig(module)
+    if (!moduleConfig?.primaryResource) {
+      return
+    }
+
+    if (action === 'generate') {
+      void handleOpenWorldviewDialog()
+      return
+    }
+
+    openResourceManager(moduleConfig.primaryResource)
   }
 
   const loadExtractModels = async () => {
@@ -545,8 +662,12 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       setWorldviewPromptPreview(preview.promptPreview || '')
       setWorldviewReferenceSummary(preview.referenceSummary || [])
       setWorldviewEvidenceSummary(preview.evidenceSummary || null)
+      setWorldviewInferenceSummary(preview.inferenceSummary || null)
       setWorldviewQualitySummary(preview.qualitySummary || null)
       setWorldviewQualityWarnings(preview.qualityWarnings || [])
+      setWorldviewAlignmentSummary(preview.alignmentSummary || null)
+      setWorldviewAlignmentWarnings(preview.alignmentWarnings || [])
+      setWorldviewValidationReportPreview(preview.validationReportPreview || null)
       setWorldviewWarnings(preview.warnings || [])
       if (!worldviewSelectedModelKey && preview.usedModelKey) {
         setWorldviewSelectedModelKey(preview.usedModelKey)
@@ -565,8 +686,19 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       setWorldviewNormalizationWarnings([])
       setWorldviewValidationWarnings([])
       setWorldviewEvidenceSummary(null)
+      setWorldviewInferenceSummary(null)
       setWorldviewQualitySummary(null)
       setWorldviewQualityWarnings([])
+      setWorldviewAlignmentSummary(null)
+      setWorldviewAlignmentWarnings([])
+      setWorldviewValidationReportPreview(null)
+      setWorldviewValidationReport(null)
+      setWorldviewInitialValidationReport(null)
+      setWorldviewFinalValidationReport(null)
+      setWorldviewRepairSummary(null)
+      setWorldviewClosureStatus(null)
+      setWorldviewRepairApplied(false)
+      setWorldviewEvidenceReselected(false)
 
       let resolvedModelKey = worldviewSelectedModelKey
       let models = worldviewModels
@@ -627,8 +759,18 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       setWorldviewPromptPreview(result.promptPreview || worldviewPromptPreview)
       setWorldviewReferenceSummary(result.referenceSummary || [])
       setWorldviewEvidenceSummary(result.evidenceSummary || null)
+      setWorldviewInferenceSummary(result.inferenceSummary || null)
       setWorldviewQualitySummary(result.qualitySummary || null)
       setWorldviewQualityWarnings(result.qualityWarnings || [])
+      setWorldviewAlignmentSummary(result.alignmentSummary || null)
+      setWorldviewAlignmentWarnings(result.alignmentWarnings || [])
+      setWorldviewValidationReport(result.validationReport || null)
+      setWorldviewInitialValidationReport(result.initialValidationReport || null)
+      setWorldviewFinalValidationReport(result.finalValidationReport || null)
+      setWorldviewRepairSummary(result.repairSummary || null)
+      setWorldviewClosureStatus(result.closureStatus || null)
+      setWorldviewRepairApplied(Boolean(result.repairApplied))
+      setWorldviewEvidenceReselected(Boolean(result.evidenceReselected))
       setWorldviewDraft(result.draft || null)
       setWorldviewWarnings(result.warnings || [])
       setWorldviewNormalizationWarnings(result.normalizationWarnings || [])
@@ -653,8 +795,16 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       })
       setWorldviewNormalizationWarnings(result.normalizationWarnings || [])
       setWorldviewValidationWarnings(result.validationWarnings || [])
+      setWorldviewInferenceSummary(result.inferenceSummary || null)
       setWorldviewQualitySummary(result.qualitySummary || null)
       setWorldviewQualityWarnings(result.qualityWarnings || [])
+      setWorldviewAlignmentSummary(result.alignmentSummary || null)
+      setWorldviewAlignmentWarnings(result.alignmentWarnings || [])
+      setWorldviewValidationReport(result.validationReport || null)
+      setWorldviewFinalValidationReport(result.validationReport || null)
+      setWorldviewClosureStatus(result.closureStatus || null)
+      setWorldviewRepairApplied(Boolean(result.repairApplied))
+      setWorldviewEvidenceReselected(Boolean(result.evidenceReselected))
       await loadOverview()
       alert(
         `世界观写入成功\n爽点架构：${result.summary.payoffArch}\n爽点线：${result.summary.payoffLines}\n对手矩阵：${result.summary.opponentMatrix}\n对手明细：${result.summary.opponents}\n权力阶梯：${result.summary.powerLadder}\n内鬼系统：${result.summary.traitorSystem}\n内鬼角色：${result.summary.traitors}\n内鬼阶段：${result.summary.traitorStages}\n故事阶段：${result.summary.storyPhases}`
@@ -1053,33 +1203,6 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     )
   }
 
-  const renderSimpleTable = (rows: Record<string, any>[], emptyText = '暂无数据') => {
-    if (!rows.length) {
-      return <div style={{ color: '#999', fontSize: '13px' }}>{emptyText}</div>
-    }
-
-    return (
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-        <thead>
-          <tr>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #f0f0f0', padding: '8px' }}>title</th>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #f0f0f0', padding: '8px' }}>description</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, idx) => (
-            <tr key={`${row.id ?? 'r'}-${idx}`}>
-              <td style={{ borderBottom: '1px solid #f7f7f7', padding: '8px', verticalAlign: 'top' }}>{extractTitle(row)}</td>
-              <td style={{ borderBottom: '1px solid #f7f7f7', padding: '8px', color: '#555' }}>
-                {extractDescription(row) || '-'}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    )
-  }
-
   const renderSetCoreTable = (rows: Record<string, any>[]) => {
     if (!rows.length) {
       return <div style={{ color: '#999', fontSize: '13px' }}>暂无数据</div>
@@ -1151,11 +1274,84 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
     }
   }
 
+  const getResourceRows = (resource: PipelineResourceName): Record<string, any>[] => {
+    switch (resource) {
+      case 'payoff-arch':
+        return payoffArchRows
+      case 'payoff-lines':
+        return payoffLineRows
+      case 'opponent-matrix':
+        return opponentMatrixRows
+      case 'opponents':
+        return opponentRows
+      case 'power-ladder':
+        return worldview.powerLadder || []
+      case 'traitor-system':
+        return traitorSystemRows
+      case 'traitors':
+        return traitorRows
+      case 'traitor-stages':
+        return traitorStageRows
+      case 'story-phases':
+        return worldview.storyPhases || []
+      default:
+        return []
+    }
+  }
+
   const enhanceSaveBehaviorDescription = requireConfirm
     ? '当前模式：生成后只回填编辑器，未自动保存到 set_core。'
     : `当前模式：生成后将自动保存到 set_core（${
         getSetCoreSaveMode() === 'new_version' ? '新建版本' : '更新当前激活版本'
       }），并刷新 Step3 数据。`
+
+  const payoffArchRows = useMemo(() => worldview.payoffArch || [], [worldview.payoffArch])
+  const payoffLineRows = useMemo(
+    () =>
+      (worldview.payoffArch || []).flatMap((arch) =>
+        (arch.lines || []).map((line: Record<string, any>) => ({
+          ...line,
+          novel_id: line.novel_id ?? arch.novel_id ?? novelId,
+          payoff_arch_id: line.payoff_arch_id ?? arch.id,
+        }))
+      ),
+    [worldview.payoffArch, novelId]
+  )
+  const opponentMatrixRows = useMemo(() => worldview.opponents || [], [worldview.opponents])
+  const opponentRows = useMemo(
+    () =>
+      (worldview.opponents || []).flatMap((matrix) =>
+        (matrix.opponents || []).map((item: Record<string, any>) => ({
+          ...item,
+          novel_id: item.novel_id ?? matrix.novel_id ?? novelId,
+          opponent_matrix_id: item.opponent_matrix_id ?? matrix.id,
+        }))
+      ),
+    [worldview.opponents, novelId]
+  )
+  const traitorSystemRows = useMemo(() => worldview.traitors || [], [worldview.traitors])
+  const traitorRows = useMemo(
+    () =>
+      (worldview.traitors || []).flatMap((system) =>
+        (system.traitors || []).map((item: Record<string, any>) => ({
+          ...item,
+          novel_id: item.novel_id ?? system.novel_id ?? novelId,
+          traitor_system_id: item.traitor_system_id ?? system.id,
+        }))
+      ),
+    [worldview.traitors, novelId]
+  )
+  const traitorStageRows = useMemo(
+    () =>
+      (worldview.traitors || []).flatMap((system) =>
+        (system.stages || []).map((item: Record<string, any>) => ({
+          ...item,
+          novel_id: item.novel_id ?? system.novel_id ?? novelId,
+          traitor_system_id: item.traitor_system_id ?? system.id,
+        }))
+      ),
+    [worldview.traitors, novelId]
+  )
 
   const skeletonTopicItemRows = useMemo(() => {
     return skeletonTopics.flatMap((topic) =>
@@ -1385,55 +1581,100 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     gap: '12px',
+                    flexWrap: 'wrap',
                   }}
                 >
                   <div>
-                    <div style={{ fontWeight: 600 }}>{item.title}</div>
-                    <div style={{ fontSize: '12px', color: '#666' }}>{item.mapping}</div>
+                    {item.primaryResource ? (
+                      <button
+                        onClick={() => openResourceManager(item.primaryResource!)}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          padding: 0,
+                          fontWeight: 600,
+                          color: '#1890ff',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {item.title}
+                      </button>
+                    ) : (
+                      <div style={{ fontWeight: 600 }}>{item.title}</div>
+                    )}
+                    <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+                      {item.resources?.length ? (
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {item.resources.map((resourceKey) => (
+                            <button
+                              key={resourceKey}
+                              onClick={() => openResourceManager(resourceKey)}
+                              style={{
+                                border: 'none',
+                                background: 'transparent',
+                                color: '#1890ff',
+                                cursor: 'pointer',
+                                padding: 0,
+                                fontSize: '12px',
+                              }}
+                            >
+                              {resourceKey}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        item.mapping
+                      )}
+                    </div>
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     {item.key === 'set_core' && (
                       <button
                         onClick={toggleSetCoreDataList}
-                        style={{ padding: '6px 12px', border: '1px solid #d9d9d9', background: 'white', borderRadius: '4px', cursor: 'pointer' }}
+                        style={{
+                          padding: '6px 12px',
+                          border: '1px solid #d9d9d9',
+                          background: 'white',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                        }}
                       >
                         {expandedDataLists.set_core ? '列表收起' : '列表展开'}
                       </button>
                     )}
                     <button
-                      onClick={() => handleModuleAction(item.key, 'generate')}
+                      onClick={() => void handleModuleAction(item.key, 'generate')}
                       style={{ padding: '6px 12px', border: '1px solid #1890ff', background: 'white', color: '#1890ff', borderRadius: '4px', cursor: 'pointer' }}
                     >
                       生成(或刷新)
                     </button>
                     <button
-                      onClick={() => {
-                        if (item.key === 'set_core') {
-                          void toggleEditor('set_core')
-                          handleModuleAction(item.key, 'edit')
-                          return
-                        }
-                        handleModuleAction(item.key, 'edit')
-                      }}
+                      onClick={() => void handleModuleAction(item.key, 'edit')}
                       style={{ padding: '6px 12px', border: '1px solid #d9d9d9', background: 'white', borderRadius: '4px', cursor: 'pointer' }}
                     >
                       {item.key === 'set_core' && expandedEditors.set_core ? '收起' : '编辑'}
                     </button>
                     <button
-                      onClick={() => {
-                        if (item.key === 'set_core') {
-                          handleSetCoreSave()
-                          return
-                        }
-                        handleModuleAction(item.key, 'save')
-                      }}
+                      onClick={() => void handleModuleAction(item.key, 'save')}
                       style={{ padding: '6px 12px', border: 'none', background: '#1890ff', color: 'white', borderRadius: '4px', cursor: 'pointer' }}
                     >
-                      保存
+                      {item.key === 'set_core' ? '保存' : '前往管理页'}
+                    </button>
+                    <button
+                      onClick={() => toggleStep3Module(item.key)}
+                      style={{
+                        padding: '6px 12px',
+                        border: '1px solid #d9d9d9',
+                        background: 'white',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {expandedStep3Modules[item.key] ? '收起' : '展开'}
                     </button>
                   </div>
                 </div>
-                {item.key === 'set_core' && expandedEditors.set_core && (
+                {item.key === 'set_core' && expandedStep3Modules[item.key] && expandedEditors.set_core && (
                   <SetCoreEditor
                     coreSettingText={coreSettingText}
                     setCoreSettingText={setCoreSettingText}
@@ -1449,18 +1690,27 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
                     onCollapse={() => void toggleEditor('set_core')}
                   />
                 )}
-                {item.key !== 'set_core' && (
+                {item.key !== 'set_core' && expandedStep3Modules[item.key] && (
                   <div
                     style={{
-                      marginTop: '8px',
-                      paddingLeft: '12px',
-                      borderLeft: '2px solid #f0f0f0',
+                      marginTop: '10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
                     }}
                   >
-                    {renderSimpleTable(getModuleRows(item.key))}
+                    {(item.resources || []).map((resource) => (
+                      <PipelineDataSection
+                        key={`${item.key}-${resource}`}
+                        novelId={novelId}
+                        resource={resource}
+                        rows={getResourceRows(resource)}
+                        onRefresh={loadOverview}
+                      />
+                    ))}
                   </div>
                 )}
-                {item.key === 'set_core' && expandedDataLists.set_core && (
+                {item.key === 'set_core' && expandedStep3Modules[item.key] && expandedDataLists.set_core && (
                   <div
                     style={{
                       marginTop: '8px',
@@ -1583,8 +1833,19 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         sourceTextCharBudget={worldviewSourceTextCharBudget}
         referenceSummary={worldviewReferenceSummary}
         evidenceSummary={worldviewEvidenceSummary}
+        inferenceSummary={worldviewInferenceSummary}
         qualitySummary={worldviewQualitySummary}
         qualityWarnings={worldviewQualityWarnings}
+        alignmentSummary={worldviewAlignmentSummary}
+        alignmentWarnings={worldviewAlignmentWarnings}
+        validationReportPreview={worldviewValidationReportPreview}
+        validationReport={worldviewValidationReport}
+        initialValidationReport={worldviewInitialValidationReport}
+        finalValidationReport={worldviewFinalValidationReport}
+        repairSummary={worldviewRepairSummary}
+        closureStatus={worldviewClosureStatus}
+        repairApplied={worldviewRepairApplied}
+        evidenceReselected={worldviewEvidenceReselected}
         draft={worldviewDraft}
         warnings={worldviewWarnings}
         normalizationWarnings={worldviewNormalizationWarnings}

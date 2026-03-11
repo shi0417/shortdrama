@@ -2,13 +2,20 @@
 
 import {
   AiModelOptionDto,
+  PipelineWorldviewAlignmentSummary,
+  PipelineWorldviewAlignmentWarning,
   PipelineWorldviewDraft,
   PipelineWorldviewEvidenceSummary,
+  PipelineWorldviewInferenceSummary,
+  PipelineWorldviewRepairSummary,
   PipelineWorldviewQualitySummary,
   PipelineWorldviewQualityWarning,
   PipelineWorldviewReferenceSummaryItem,
   PipelineWorldviewReferenceTable,
+  PipelineWorldviewValidationReport,
+  PipelineWorldviewClosureStatus,
 } from '@/types/pipeline'
+import { groupWarningsByModuleAndIndex } from './worldview-warning-utils'
 
 interface PipelineWorldviewDialogProps {
   open: boolean
@@ -25,8 +32,19 @@ interface PipelineWorldviewDialogProps {
   sourceTextCharBudget: number
   referenceSummary: PipelineWorldviewReferenceSummaryItem[]
   evidenceSummary: PipelineWorldviewEvidenceSummary | null
+  inferenceSummary: PipelineWorldviewInferenceSummary | null
   qualitySummary: PipelineWorldviewQualitySummary | null
   qualityWarnings: PipelineWorldviewQualityWarning[]
+  alignmentSummary: PipelineWorldviewAlignmentSummary | null
+  alignmentWarnings: PipelineWorldviewAlignmentWarning[]
+  validationReportPreview: PipelineWorldviewValidationReport | null
+  validationReport: PipelineWorldviewValidationReport | null
+  initialValidationReport: PipelineWorldviewValidationReport | null
+  finalValidationReport: PipelineWorldviewValidationReport | null
+  repairSummary: PipelineWorldviewRepairSummary | null
+  closureStatus: PipelineWorldviewClosureStatus | null
+  repairApplied: boolean
+  evidenceReselected: boolean
   draft: PipelineWorldviewDraft | null
   warnings: string[]
   normalizationWarnings: string[]
@@ -112,8 +130,19 @@ export default function PipelineWorldviewDialog({
   sourceTextCharBudget,
   referenceSummary,
   evidenceSummary,
+  inferenceSummary,
   qualitySummary,
   qualityWarnings,
+  alignmentSummary,
+  alignmentWarnings,
+  validationReportPreview,
+  validationReport,
+  initialValidationReport,
+  finalValidationReport,
+  repairSummary,
+  closureStatus,
+  repairApplied,
+  evidenceReselected,
   draft,
   warnings,
   normalizationWarnings,
@@ -133,8 +162,10 @@ export default function PipelineWorldviewDialog({
   if (!open) return null
 
   const allWarnings = [...warnings, ...normalizationWarnings, ...validationWarnings]
-  const traitorQualityWarnings = qualityWarnings.filter((item) => item.moduleKey === 'traitor')
-  const storyPhaseQualityWarnings = qualityWarnings.filter((item) => item.moduleKey === 'story_phase')
+  const mergedStructuredWarnings = [...qualityWarnings, ...alignmentWarnings]
+  const traitorQualityWarnings = mergedStructuredWarnings.filter((item) => item.moduleKey === 'traitor')
+  const storyPhaseQualityWarnings = mergedStructuredWarnings.filter((item) => item.moduleKey === 'story_phase')
+  const warningGroups = groupWarningsByModuleAndIndex(mergedStructuredWarnings)
 
   const moduleOrder: Array<{
     key: keyof PipelineWorldviewQualitySummary['byModule']
@@ -146,6 +177,16 @@ export default function PipelineWorldviewDialog({
     { key: 'traitor', label: 'traitor' },
     { key: 'story_phase', label: 'story_phase' },
   ]
+
+  const getSeverityColor = (items: PipelineWorldviewQualityWarning[]) => {
+    if (items.some((item) => item.severity === 'bad')) return '#cf1322'
+    return '#d48806'
+  }
+
+  const getTag = (items: PipelineWorldviewQualityWarning[]) =>
+    `${items.filter((item) => item.severity === 'bad').length} bad / ${
+      items.filter((item) => item.severity === 'weak').length
+    } weak`
 
   return (
     <div
@@ -198,6 +239,30 @@ export default function PipelineWorldviewDialog({
         >
           本流程采用三段式：Preview Prompt -> 生成世界观草稿 -> 确认写入数据库。`set_core`
           仅作为输入参考，不在本轮统一写库中被覆盖。
+        </div>
+
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: '6px', padding: '10px' }}>
+          <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>闭环修复结果</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', fontSize: '12px' }}>
+            <div>closure status：{closureStatus || '-'}</div>
+            <div>repair applied：{repairApplied ? 'yes' : 'no'}</div>
+            <div>evidence reselected：{evidenceReselected ? 'yes' : 'no'}</div>
+            <div>
+              score before / after：{repairSummary ? `${repairSummary.scoreBefore} / ${repairSummary.scoreAfter}` : '-'}
+            </div>
+            <div>
+              issues before / after：
+              {repairSummary
+                ? ` ${repairSummary.issueCountBefore} / ${repairSummary.issueCountAfter}`
+                : '-'}
+            </div>
+            <div>
+              action：
+              {repairSummary
+                ? `${repairSummary.actionType} (${repairSummary.targetModules.join(', ') || 'none'})`
+                : '-'}
+            </div>
+          </div>
         </div>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -388,6 +453,56 @@ export default function PipelineWorldviewDialog({
         </div>
 
         <div style={{ border: '1px solid #f0f0f0', borderRadius: '6px', padding: '10px' }}>
+          <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>Interval Inference Summary</div>
+          {!inferenceSummary ? (
+            <div style={{ color: '#999', fontSize: '12px' }}>暂无 inference 信息</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px', fontSize: '12px' }}>
+              <div>story phase inferred: {inferenceSummary.storyPhase.storyPhaseIntervalsInferred}</div>
+              <div>story phase adjusted: {inferenceSummary.storyPhase.storyPhaseIntervalsAdjusted}</div>
+              <div>payoff inferred: {inferenceSummary.payoff.payoffIntervalsInferred}</div>
+              <div>payoff adjusted: {inferenceSummary.payoff.payoffIntervalsAdjusted}</div>
+              <div>power inferred: {inferenceSummary.power.powerIntervalsInferred}</div>
+              <div>power adjusted: {inferenceSummary.power.powerIntervalsAdjusted}</div>
+              <div>traitor stage inferred: {inferenceSummary.traitorStage.traitorStageIntervalsInferred}</div>
+              <div>traitor stage adjusted: {inferenceSummary.traitorStage.traitorStageIntervalsAdjusted}</div>
+              <div style={{ gridColumn: '1 / -1', color: '#555' }}>
+                notes:{' '}
+                {[
+                  ...(inferenceSummary.storyPhase.notes || []),
+                  ...(inferenceSummary.payoff.notes || []),
+                  ...(inferenceSummary.power.notes || []),
+                  ...(inferenceSummary.traitorStage.notes || []),
+                ].length
+                  ? [
+                      ...(inferenceSummary.storyPhase.notes || []),
+                      ...(inferenceSummary.payoff.notes || []),
+                      ...(inferenceSummary.power.notes || []),
+                      ...(inferenceSummary.traitorStage.notes || []),
+                    ].join(' / ')
+                  : '-'}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: '6px', padding: '10px' }}>
+          <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>Cross-table Alignment Summary</div>
+          {!alignmentSummary ? (
+            <div style={{ color: '#999', fontSize: '12px' }}>暂无 alignment 信息</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', fontSize: '12px' }}>
+              <div>total issues: {alignmentSummary.totalIssues}</div>
+              <div>payoff: {alignmentSummary.byModule.payoff || 0}</div>
+              <div>opponents: {alignmentSummary.byModule.opponents || 0}</div>
+              <div>power: {alignmentSummary.byModule.power || 0}</div>
+              <div>traitor: {alignmentSummary.byModule.traitor || 0}</div>
+              <div>story_phase: {alignmentSummary.byModule.story_phase || 0}</div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: '6px', padding: '10px' }}>
           <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>质量检查摘要</div>
           {!qualitySummary ? (
             <div style={{ color: '#999', fontSize: '12px' }}>暂无质量检查结果，先刷新预览或生成草稿</div>
@@ -411,6 +526,30 @@ export default function PipelineWorldviewDialog({
           )}
         </div>
 
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: '6px', padding: '10px' }}>
+          <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>闭环校验摘要</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px', fontSize: '12px' }}>
+            <div>
+              初次校验：{initialValidationReport ? `score ${initialValidationReport.score}` : '-'}
+              {initialValidationReport
+                ? ` / fatal ${initialValidationReport.fatalCount} / major ${initialValidationReport.majorCount} / minor ${initialValidationReport.minorCount}`
+                : ''}
+            </div>
+            <div>
+              修复后校验：{finalValidationReport ? `score ${finalValidationReport.score}` : '-'}
+              {finalValidationReport
+                ? ` / fatal ${finalValidationReport.fatalCount} / major ${finalValidationReport.majorCount} / minor ${finalValidationReport.minorCount}`
+                : ''}
+            </div>
+            <div>
+              preview 校验：{validationReportPreview ? `score ${validationReportPreview.score}` : '-'}
+            </div>
+            <div>
+              persist 校验：{validationReport ? `score ${validationReport.score}` : '-'}
+            </div>
+          </div>
+        </div>
+
         {allWarnings.length > 0 && (
           <div style={{ border: '1px solid #fff1b8', background: '#fffbe6', borderRadius: '6px', padding: '10px' }}>
             <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '6px' }}>提示信息</div>
@@ -432,9 +571,35 @@ export default function PipelineWorldviewDialog({
                 '核心爽点架构',
                 draft.setPayoffArch.lines.map((row) => ({
                   title: row.line_name || row.line_key,
-                  desc: row.line_content,
+                  desc: `区间: ${row.start_ep ?? '-'} ~ ${row.end_ep ?? '-'} ｜ 阶段: ${
+                    row.stage_text || '-'
+                  } ｜ ${row.line_content}`,
                 }))
               )}
+              {draft.setPayoffArch.lines.map((row, index) => {
+                const itemWarnings = warningGroups.get(`payoff.lines:${index}`) || []
+                if (!itemWarnings.length) return null
+                return (
+                  <div
+                    key={`payoff-warning-${index}`}
+                    style={{
+                      border: `1px solid ${getSeverityColor(itemWarnings)}`,
+                      background: '#fffbe6',
+                      borderRadius: '6px',
+                      padding: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                      {row.line_name || `爽点线${index + 1}`} [{getTag(itemWarnings)}]
+                    </div>
+                    {itemWarnings.map((item, wIndex) => (
+                      <div key={`${item.path}-${wIndex}`} style={{ fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                        - {item.path}: {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
               {renderItems(
                 '对手矩阵',
                 draft.setOpponentMatrix.opponents.map((row) => ({
@@ -442,13 +607,61 @@ export default function PipelineWorldviewDialog({
                   desc: row.detailed_desc || row.threat_type || '',
                 }))
               )}
+              {draft.setOpponentMatrix.opponents.map((row, index) => {
+                const itemWarnings = warningGroups.get(`opponents.items:${index}`) || []
+                if (!itemWarnings.length) return null
+                return (
+                  <div
+                    key={`opponents-warning-${index}`}
+                    style={{
+                      border: `1px solid ${getSeverityColor(itemWarnings)}`,
+                      background: '#fffbe6',
+                      borderRadius: '6px',
+                      padding: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                      {row.opponent_name || `对手${index + 1}`} [{getTag(itemWarnings)}]
+                    </div>
+                    {itemWarnings.map((item, wIndex) => (
+                      <div key={`${item.path}-${wIndex}`} style={{ fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                        - {item.path}: {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
               {renderItems(
                 '权力升级阶梯',
                 draft.setPowerLadder.map((row) => ({
                   title: `${row.level_no}. ${row.level_title}`,
-                  desc: `${row.identity_desc} ${row.ability_boundary}`.trim(),
+                  desc: `区间: ${row.start_ep ?? '-'} ~ ${row.end_ep ?? '-'} ｜ ${`${row.identity_desc} ${row.ability_boundary}`.trim()}`,
                 }))
               )}
+              {draft.setPowerLadder.map((row, index) => {
+                const itemWarnings = warningGroups.get(`power.items:${index}`) || []
+                if (!itemWarnings.length) return null
+                return (
+                  <div
+                    key={`power-warning-${index}`}
+                    style={{
+                      border: `1px solid ${getSeverityColor(itemWarnings)}`,
+                      background: '#fffbe6',
+                      borderRadius: '6px',
+                      padding: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                      {row.level_title || `Lv.${index + 1}`} [{getTag(itemWarnings)}]
+                    </div>
+                    {itemWarnings.map((item, wIndex) => (
+                      <div key={`${item.path}-${wIndex}`} style={{ fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                        - {item.path}: {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
               {renderItems(
                 '内鬼角色',
                 draft.setTraitorSystem.traitors.map((row) => ({
@@ -458,6 +671,31 @@ export default function PipelineWorldviewDialog({
                     .join(' | '),
                 }))
               )}
+              {draft.setTraitorSystem.traitors.map((row, index) => {
+                const itemWarnings =
+                  warningGroups.get(`traitor.traitors:${index}`) || []
+                if (!itemWarnings.length) return null
+                return (
+                  <div
+                    key={`traitor-item-warning-${index}`}
+                    style={{
+                      border: `1px solid ${getSeverityColor(itemWarnings)}`,
+                      background: '#fffbe6',
+                      borderRadius: '6px',
+                      padding: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                      {row.name || `内鬼${index + 1}`} [{getTag(itemWarnings)}]
+                    </div>
+                    {itemWarnings.map((item, wIndex) => (
+                      <div key={`${item.path}-${wIndex}`} style={{ fontSize: '12px', color: getSeverityColor(itemWarnings) }}>
+                        - {item.path}: {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
               {traitorQualityWarnings.length > 0 && (
                 <div style={{ border: '1px solid #ffe58f', background: '#fffbe6', borderRadius: '6px', padding: '8px' }}>
                   <div style={{ fontWeight: 600, marginBottom: '4px', fontSize: '12px' }}>Traitor warnings</div>
@@ -475,13 +713,66 @@ export default function PipelineWorldviewDialog({
                   desc: row.stage_desc,
                 }))
               )}
+              {draft.setTraitorSystem.stages.map((row, index) => {
+                const stageWarnings = warningGroups.get(`traitor.stages:${index}`) || []
+                if (!stageWarnings.length) return null
+                return (
+                  <div
+                    key={`traitor-stage-warning-${index}`}
+                    style={{
+                      border: `1px solid ${getSeverityColor(stageWarnings)}`,
+                      background: '#fffbe6',
+                      borderRadius: '6px',
+                      padding: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '12px', color: getSeverityColor(stageWarnings) }}>
+                      {row.stage_title || `阶段${index + 1}`} [{getTag(stageWarnings)}]
+                    </div>
+                    {stageWarnings.map((item, wIndex) => (
+                      <div key={`${item.path}-${wIndex}`} style={{ fontSize: '12px', color: getSeverityColor(stageWarnings) }}>
+                        - {item.path}: {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
               {renderItems(
                 '故事发展阶段',
                 draft.setStoryPhases.map((row) => ({
                   title: row.phase_name,
-                  desc: [row.historical_path, row.rewrite_path].filter(Boolean).join(' | '),
+                  desc: `区间: ${row.start_ep ?? '-'} ~ ${row.end_ep ?? '-'} ｜ ${[
+                    row.historical_path,
+                    row.rewrite_path,
+                  ]
+                    .filter(Boolean)
+                    .join(' | ')}`,
                 }))
               )}
+              {draft.setStoryPhases.map((row, index) => {
+                const phaseWarnings = warningGroups.get(`story_phase.items:${index}`) || []
+                if (!phaseWarnings.length) return null
+                return (
+                  <div
+                    key={`story-phase-warning-${index}`}
+                    style={{
+                      border: `1px solid ${getSeverityColor(phaseWarnings)}`,
+                      background: '#fffbe6',
+                      borderRadius: '6px',
+                      padding: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '12px', color: getSeverityColor(phaseWarnings) }}>
+                      {row.phase_name || `阶段${index + 1}`} [{getTag(phaseWarnings)}]
+                    </div>
+                    {phaseWarnings.map((item, wIndex) => (
+                      <div key={`${item.path}-${wIndex}`} style={{ fontSize: '12px', color: getSeverityColor(phaseWarnings) }}>
+                        - {item.path}: {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
               {storyPhaseQualityWarnings.length > 0 && (
                 <div style={{ border: '1px solid #ffe58f', background: '#fffbe6', borderRadius: '6px', padding: '8px' }}>
                   <div style={{ fontWeight: 600, marginBottom: '4px', fontSize: '12px' }}>Story phase warnings</div>
@@ -499,7 +790,26 @@ export default function PipelineWorldviewDialog({
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
           {!!qualitySummary?.badCount && (
             <div style={{ marginRight: 'auto', fontSize: '12px', color: '#cf1322', alignSelf: 'center' }}>
-              当前草稿仍有 {qualitySummary.badCount} 个严重低质字段，建议先优化后再写库。
+              当前草稿仍有 {qualitySummary.badCount} 个严重低质字段：
+              {qualitySummary.byModule.story_phase.bad > 0
+                ? ` story_phase(阶段区间/阶段文本)=${qualitySummary.byModule.story_phase.bad};`
+                : ''}
+              {qualitySummary.byModule.traitor.bad > 0
+                ? ` traitor(身份/威胁描述)=${qualitySummary.byModule.traitor.bad};`
+                : ''}
+              {qualitySummary.byModule.opponents.bad > 0
+                ? ` opponents(对手占位值/威胁缺失)=${qualitySummary.byModule.opponents.bad};`
+                : ''}
+              {alignmentSummary?.totalIssues
+                ? ` cross-table(节奏对齐问题)=${alignmentSummary.totalIssues};`
+                : ''}
+              {finalValidationReport?.fatalCount
+                ? ` fatal=${finalValidationReport.fatalCount};`
+                : ''}
+              {finalValidationReport?.majorCount
+                ? ` major=${finalValidationReport.majorCount};`
+                : ''}
+              建议先优化后再写库。
             </div>
           )}
           <button

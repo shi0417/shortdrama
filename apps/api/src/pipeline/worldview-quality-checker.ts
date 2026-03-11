@@ -25,14 +25,31 @@ export type WorldviewDraftShape = {
   setPayoffArch: {
     name: string;
     notes: string;
-    lines: Array<{ line_name: string; line_content: string }>;
+    lines: Array<{
+      line_name: string;
+      line_content: string;
+      start_ep?: number | null;
+      end_ep?: number | null;
+      stage_text?: string | null;
+    }>;
   };
   setOpponentMatrix: {
     name: string;
     description: string;
-    opponents: Array<{ threat_type: string | null; detailed_desc: string | null }>;
+    opponents: Array<{
+      level_name?: string;
+      opponent_name?: string;
+      threat_type: string | null;
+      detailed_desc: string | null;
+    }>;
   };
-  setPowerLadder: Array<{ level_title: string; identity_desc: string; ability_boundary: string }>;
+  setPowerLadder: Array<{
+    level_title: string;
+    identity_desc: string;
+    ability_boundary: string;
+    start_ep?: number | null;
+    end_ep?: number | null;
+  }>;
   setTraitorSystem: {
     name: string;
     description: string;
@@ -131,6 +148,24 @@ export class WorldviewQualityChecker {
       push('opponents', 'setOpponentMatrix.description', 'weak', '对手矩阵 description 偏弱');
     }
     draft.setOpponentMatrix.opponents.forEach((row, index) => {
+      const levelName = this.normalize(row.level_name);
+      const opponentName = this.normalize(row.opponent_name);
+      if (/^(层级|分类)\d+$/u.test(levelName)) {
+        push(
+          'opponents',
+          `setOpponentMatrix.opponents[${index}].level_name`,
+          'weak',
+          'level_name 仍为占位值',
+        );
+      }
+      if (/^(对手|角色)\d+$/u.test(opponentName)) {
+        push(
+          'opponents',
+          `setOpponentMatrix.opponents[${index}].opponent_name`,
+          'bad',
+          'opponent_name 仍为占位值',
+        );
+      }
       if (!this.normalize(row.threat_type) && !this.normalize(row.detailed_desc)) {
         push(
           'opponents',

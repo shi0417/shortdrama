@@ -1,0 +1,167 @@
+{
+  "测试准备状态": "已完成",
+  "准备时间": "2026-03-11",
+  "测试对象": "novel_id=1 的 worldview 闭环补测",
+  "测试方法": "API 直接调用（非浏览器自动化）",
+  
+  "serviceCheck": {
+    "frontendReachable": "待测试 - GET http://localhost:3000",
+    "backendReachable": "待测试 - GET http://localhost:4000/health",
+    "loginSuccess": "待测试 - POST /auth/login with s01/123456"
+  },
+  
+  "runtimeFieldsLoaded": "待测试 - 检查接口响应中是否包含闭环字段",
+  
+  "previewResult": {
+    "接口": "POST /pipeline/1/worldview/preview",
+    "状态": "待测试",
+    "关键字段": [
+      "validationReportPreview",
+      "evidenceSummary",
+      "qualityWarnings (包含 off-topic 检测)"
+    ]
+  },
+  
+  "generateResult": {
+    "接口": "POST /pipeline/1/worldview/generate",
+    "状态": "待测试",
+    "关键字段": [
+      "closureStatus (闭环状态)",
+      "repairApplied (是否执行修复)",
+      "evidenceReselected (是否重选证据)",
+      "repairSummary (修复摘要)",
+      "initialValidationReport (修复前报告)",
+      "finalValidationReport (修复后报告)",
+      "delta (前后对比)",
+      "moduleSamples (模块抽样)"
+    ],
+    "闭环逻辑": "代码位置: pipeline-worldview.service.ts L308-395"
+  },
+  
+  "persistResult": {
+    "接口": "POST /pipeline/1/worldview/persist",
+    "状态": "待测试",
+    "关键字段": [
+      "validationReport",
+      "closureStatus",
+      "repairApplied (总是 false)",
+      "evidenceReselected (总是 false)",
+      "summary (持久化摘要)"
+    ]
+  },
+  
+  "overviewResult": {
+    "接口": "GET /pipeline/1/overview",
+    "状态": "待测试",
+    "关键字段": [
+      "worldviewCounts (各模块计数)",
+      "keySummary (主角、时代、主题)"
+    ]
+  },
+  
+  "dbChecks": {
+    "unableDirectDb": true,
+    "替代方案": "通过 API 数据对比验证",
+    "状态": "待测试"
+  },
+  
+  "uiChecks": {
+    "unableToAccessUI": true,
+    "原因": "API 测试方式，未使用浏览器自动化",
+    "验证方式": "需要手动在浏览器中验证",
+    "状态": "待手动验证"
+  },
+  
+  "verdictCandidate": {
+    "PASS条件": "所有接口成功 + 闭环字段完整",
+    "PARTIAL条件": "部分接口成功",
+    "FAIL条件": "服务不可达或主要接口失败",
+    "状态": "待测试"
+  },
+  
+  "已创建文件": {
+    "测试脚本": [
+      "execute_worldview_test.py (主脚本，推荐)",
+      "test_direct.py (简化版)",
+      "test-worldview-closure.js (Node.js版)"
+    ],
+    "文档": [
+      "worldview_closure_test_report.md (详细报告)",
+      "WORLDVIEW_TEST_README.md (使用说明)",
+      "WORLDVIEW_TEST_SUMMARY.json (测试摘要)",
+      "worldview_test_result_expected.json (预期结果)",
+      "WORLDVIEW_CLOSURE_TEST_FINAL_REPORT.md (最终报告)",
+      "test_preparation_complete.json (本文件)"
+    ]
+  },
+  
+  "执行指南": {
+    "前置条件": [
+      "启动后端: cd apps/api && npm run start:dev",
+      "启动前端: cd apps/web && npm run dev",
+      "安装依赖: pip install requests"
+    ],
+    "执行命令": "python execute_worldview_test.py",
+    "查看结果": [
+      "type worldview_test_result.json",
+      "type test_execution.log"
+    ]
+  },
+  
+  "代码分析完成": {
+    "核心文件": "apps/api/src/pipeline/pipeline-worldview.service.ts",
+    "关键方法": {
+      "previewPrompt": "L216-269",
+      "generateDraft": "L271-422 (包含闭环逻辑 L308-395)",
+      "persistDraft": "L424-486"
+    },
+    "闭环流程": [
+      "1. 生成初始草稿 (L289)",
+      "2. 初始校验 (L308) → initialValidationReport",
+      "3. 制定修复计划 (L316) → repairPlan",
+      "4. 执行修复 (L330-385)",
+      "   4.1 证据重选 (L333-339)",
+      "   4.2 模块修复 (L341-357)",
+      "   4.3 最终校验 (L369-376) → finalValidationReport",
+      "5. 确定闭环状态 (L387) → closureStatus",
+      "6. 返回闭环结果 (L397-421)"
+    ]
+  },
+  
+  "环境限制说明": {
+    "问题": [
+      "Shell 工具无法返回命令输出",
+      "浏览器自动化工具不可用",
+      "WebFetch 无法访问 localhost"
+    ],
+    "解决方案": [
+      "创建独立 Python 脚本写入文件",
+      "采用 API 直接调用方式",
+      "UI 验证需手动进行"
+    ]
+  },
+  
+  "下一步行动": [
+    "1. 确保前后端服务已启动",
+    "2. 执行: python execute_worldview_test.py",
+    "3. 查看: worldview_test_result.json",
+    "4. 对比: worldview_test_result_expected.json",
+    "5. 分析: 检查所有关键证据点",
+    "6. UI验证: 手动在浏览器中验证",
+    "7. 记录: 更新实际测试结果"
+  ],
+  
+  "预期结果": {
+    "如果实现正确": {
+      "verdict": "pass",
+      "closureStatus": "accepted 或 accepted_with_repair",
+      "repairApplied": "true (如果初始草稿有问题)",
+      "delta": {
+        "score": "提升",
+        "issues": "减少"
+      }
+    }
+  },
+  
+  "总结": "测试准备工作已完成。由于环境限制，采用 API 直接调用方式。测试脚本基于代码深入分析，预期能准确验证闭环修复功能。现在需要手动执行测试脚本以获取实际结果。"
+}

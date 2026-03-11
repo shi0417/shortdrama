@@ -1,0 +1,265 @@
+{
+  "测试摘要": {
+    "测试时间": "2026-03-11",
+    "测试对象": "novel_id=1 的 worldview 闭环补测",
+    "测试方法": "API 直接调用（非浏览器自动化）",
+    "测试状态": "测试脚本已就绪，等待执行"
+  },
+  
+  "serviceCheck": {
+    "说明": "服务可达性检查",
+    "frontendReachable": {
+      "检查项": "GET http://localhost:3000",
+      "预期": "HTTP 200",
+      "实际": "待执行",
+      "证据": "前端服务响应状态码"
+    },
+    "backendReachable": {
+      "检查项": "GET http://localhost:4000/health",
+      "预期": "HTTP 200",
+      "实际": "待执行",
+      "证据": "后端健康检查响应"
+    },
+    "loginSuccess": {
+      "检查项": "POST http://localhost:4000/auth/login",
+      "预期": "返回 access_token",
+      "实际": "待执行",
+      "证据": "JWT token 存在"
+    }
+  },
+  
+  "runtimeFieldsLoaded": {
+    "说明": "检查运行时闭环字段是否在接口响应中出现",
+    "字段列表": [
+      "validationReportPreview (preview 接口)",
+      "validationReport (persist 接口)",
+      "initialValidationReport (generate 接口)",
+      "finalValidationReport (generate 接口)",
+      "repairSummary (generate/persist 接口)",
+      "closureStatus (generate/persist 接口)",
+      "repairApplied (generate/persist 接口)",
+      "evidenceReselected (generate 接口)"
+    ],
+    "预期": "至少在 generate 接口中出现所有闭环字段",
+    "实际": "待执行",
+    "证据来源": "接口响应 JSON 的顶层字段"
+  },
+  
+  "previewResult": {
+    "说明": "Preview 接口测试结果",
+    "接口": "POST /pipeline/1/worldview/preview",
+    "预期状态": 200,
+    "关键证据点": {
+      "validationReportPreview": {
+        "说明": "预览校验报告",
+        "关键字段": ["score", "fatalCount", "majorCount", "minorCount", "issues"]
+      },
+      "evidenceSummary": {
+        "说明": "证据摘要",
+        "关键字段": ["evidenceSegments", "coverageChapters", "evidenceChars", "moduleEvidenceCount"]
+      },
+      "promptEvidenceOffTopicHits": {
+        "说明": "证据离题检测",
+        "检查对象": ["张士诚", "陈友谅", "蓝玉", "胡惟庸"],
+        "预期": "在 qualityWarnings 中可能出现 off-topic 警告"
+      }
+    },
+    "实际": "待执行"
+  },
+  
+  "generateResult": {
+    "说明": "Generate 接口测试结果 - 闭环修复的核心步骤",
+    "接口": "POST /pipeline/1/worldview/generate",
+    "预期状态": 200,
+    "关键证据点": {
+      "闭环状态": {
+        "closureStatus": {
+          "说明": "闭环状态",
+          "可能值": ["accepted", "accepted_with_repair", "rejected"],
+          "预期": "accepted 或 accepted_with_repair"
+        },
+        "repairApplied": {
+          "说明": "是否执行了修复",
+          "预期": "true (如果初始草稿有问题) 或 false (如果质量足够好)"
+        },
+        "evidenceReselected": {
+          "说明": "是否重新选择证据",
+          "预期": "true (如果需要过滤弱相关证据) 或 false"
+        }
+      },
+      "修复摘要": {
+        "repairSummary": {
+          "actionType": "修复类型: accept | repair_module | regenerate_all",
+          "targetModules": "修复目标模块列表",
+          "issueCountBefore": "修复前问题数",
+          "issueCountAfter": "修复后问题数",
+          "scoreBefore": "修复前分数",
+          "scoreAfter": "修复后分数"
+        }
+      },
+      "前后对比": {
+        "initialValidationReport": "修复前的校验报告",
+        "finalValidationReport": "修复后的校验报告",
+        "delta": {
+          "score": "分数变化: before → after (improvement)",
+          "fatal": "Fatal 问题变化: before → after (reduction)",
+          "major": "Major 问题变化: before → after (reduction)",
+          "minor": "Minor 问题变化: before → after (reduction)"
+        }
+      },
+      "模块抽样": {
+        "payoffLines": "payoff 台词列表 (前2条)",
+        "opponents": "对手列表 (前2条)",
+        "powerLadder": "权力阶梯 (前2条)",
+        "traitors": "叛徒列表 (前2条)",
+        "traitorStages": "叛徒阶段 (前2条)",
+        "storyPhases": "故事阶段 (前2条)"
+      }
+    },
+    "实际": "待执行",
+    "代码实现": "apps/api/src/pipeline/pipeline-worldview.service.ts L271-422"
+  },
+  
+  "persistResult": {
+    "说明": "Persist 接口测试结果",
+    "接口": "POST /pipeline/1/worldview/persist",
+    "预期状态": 200,
+    "关键证据点": {
+      "validationReport": "持久化后的校验报告",
+      "closureStatus": "闭环状态 (persist 阶段不执行修复)",
+      "repairApplied": "总是 false (persist 不执行修复)",
+      "evidenceReselected": "总是 false (persist 不执行修复)",
+      "summary": "持久化摘要 (插入的记录数)"
+    },
+    "实际": "待执行",
+    "代码实现": "apps/api/src/pipeline/pipeline-worldview.service.ts L424-486"
+  },
+  
+  "overviewResult": {
+    "说明": "Overview 接口测试结果",
+    "接口": "GET /pipeline/1/overview",
+    "预期状态": 200,
+    "关键证据点": {
+      "worldviewCounts": {
+        "payoffLines": "payoff 台词数量",
+        "opponents": "对手数量",
+        "powerLadder": "权力层级数量",
+        "traitors": "叛徒数量",
+        "traitorStages": "叛徒阶段数量",
+        "storyPhases": "故事阶段数量"
+      },
+      "keySummary": {
+        "protagonist": "主角名称",
+        "setting": "时代背景",
+        "theme": "主题"
+      }
+    },
+    "实际": "待执行"
+  },
+  
+  "dbChecks": {
+    "说明": "数据库检查（通过 API 数据替代）",
+    "unableDirectDb": true,
+    "alternativeEvidence": [
+      "通过 overview 接口验证持久化数据",
+      "通过 persist 接口的 summary 字段验证插入记录数",
+      "通过 generate draft 与 overview 数据对比验证一致性",
+      "通过闭环字段验证修复流程执行情况"
+    ],
+    "实际": "待执行"
+  },
+  
+  "uiChecks": {
+    "说明": "UI 检查（API 测试无法直接验证）",
+    "unableToAccessUI": true,
+    "reason": "使用 API 测试方式，未使用浏览器自动化",
+    "预期UI元素": [
+      "在 PipelineWorldviewDialog 中显示 '闭环修复结果' 区域",
+      "显示 closureStatus 徽章",
+      "显示 repairApplied 和 evidenceReselected 标记",
+      "显示 repairSummary 详情（修复前后对比）",
+      "显示修复目标模块列表",
+      "在 worldview-warning-utils.ts 中正确映射模块警告",
+      "payoff/opponents/power/traitor/story_phase 模块的警告正确显示"
+    ],
+    "验证方式": "需要手动在浏览器中打开前端界面验证",
+    "实际": "待手动验证"
+  },
+  
+  "verdictCandidate": {
+    "说明": "测试判定标准",
+    "PASS条件": [
+      "所有服务可达 (frontend + backend)",
+      "登录成功",
+      "Preview 接口返回 200",
+      "Generate 接口返回 200",
+      "Persist 接口返回 200",
+      "Overview 接口返回 200",
+      "运行时闭环字段已加载 (runtimeFieldsLoaded = true)",
+      "Generate 返回完整的闭环字段",
+      "Persist 返回闭环字段"
+    ],
+    "PARTIAL条件": [
+      "登录成功",
+      "至少 Preview 或 Generate 接口成功",
+      "但存在部分接口失败或字段缺失"
+    ],
+    "FAIL条件": [
+      "服务不可达",
+      "登录失败",
+      "主要接口调用失败"
+    ],
+    "实际判定": "待执行"
+  },
+  
+  "执行方式": {
+    "推荐方法": "python execute_worldview_test.py",
+    "前置条件": [
+      "确保后端服务已启动: cd apps/api && npm run start:dev",
+      "确保前端服务已启动: cd apps/web && npm run dev",
+      "确保 Python 已安装: python --version",
+      "确保 requests 库已安装: pip install requests"
+    ],
+    "输出文件": [
+      "worldview_test_result.json - JSON 格式的测试结果",
+      "test_execution.log - 详细的执行日志"
+    ],
+    "查看结果": "type worldview_test_result.json"
+  },
+  
+  "代码实现参考": {
+    "核心文件": [
+      "apps/api/src/pipeline/pipeline-worldview.service.ts",
+      "apps/api/src/pipeline/worldview-closure.types.ts",
+      "apps/api/src/pipeline/worldview-validation-orchestrator.ts",
+      "apps/api/src/pipeline/worldview-repair-planner.ts",
+      "apps/api/src/pipeline/worldview-module-repair.service.ts"
+    ],
+    "闭环逻辑位置": "pipeline-worldview.service.ts L308-395",
+    "关键方法": {
+      "previewPrompt": "L216-269",
+      "generateDraft": "L271-422 (包含闭环逻辑)",
+      "persistDraft": "L424-486"
+    }
+  },
+  
+  "注意事项": [
+    "Generate 接口可能耗时较长（调用 AI 模型），已设置 120 秒超时",
+    "闭环修复逻辑仅在 Generate 阶段执行，Persist 不执行修复",
+    "repairApplied 和 evidenceReselected 字段仅在 Generate 时可能为 true",
+    "closureStatus 可能的值: accepted | accepted_with_repair | rejected",
+    "前端 UI 应根据这些字段动态显示闭环修复结果",
+    "测试脚本采用 API 调用方式，未使用浏览器自动化",
+    "UI 验证需要手动在浏览器中进行"
+  ],
+  
+  "下一步行动": [
+    "1. 确保前后端服务已启动",
+    "2. 执行测试脚本: python execute_worldview_test.py",
+    "3. 查看测试结果: type worldview_test_result.json",
+    "4. 对比预期结果: worldview_test_result_expected.json",
+    "5. 如有差异，查看执行日志: type test_execution.log",
+    "6. 手动在浏览器中验证 UI 显示",
+    "7. 记录实际测试结果并更新文档"
+  ]
+}

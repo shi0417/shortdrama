@@ -14,8 +14,44 @@ import {
 import { SourceRetrievalService } from '../source-texts/source-retrieval.service';
 import {
   WorldviewDraftShape,
+  WorldviewQualityWarning,
   WorldviewQualityChecker,
 } from './worldview-quality-checker';
+import {
+  StoryPhaseIntervalInferenceSummary,
+  StoryPhaseInferenceWarning,
+  WorldviewStoryPhaseInference,
+} from './story-phase-interval-inference';
+import {
+  PayoffInferenceWarning,
+  PayoffIntervalInferenceSummary,
+  WorldviewPayoffIntervalInference,
+} from './payoff-interval-inference';
+import {
+  PowerInferenceWarning,
+  PowerIntervalInferenceSummary,
+  WorldviewPowerIntervalInference,
+} from './power-interval-inference';
+import {
+  TraitorStageInferenceWarning,
+  TraitorStageIntervalInferenceSummary,
+  WorldviewTraitorStageIntervalInference,
+} from './traitor-stage-interval-inference';
+import {
+  WorldviewAlignmentSummary,
+  WorldviewAlignmentWarning,
+  WorldviewCrossTableAlignmentChecker,
+} from './worldview-cross-table-alignment-checker';
+import {
+  WorldviewClosureResult,
+  WorldviewClosureStatus,
+  WorldviewRepairPlan,
+  WorldviewRepairSummary,
+  WorldviewValidationReport,
+} from './worldview-closure.types';
+import { WorldviewValidationOrchestrator } from './worldview-validation-orchestrator';
+import { WorldviewRepairPlanner } from './worldview-repair-planner';
+import { WorldviewModuleRepairService } from './worldview-module-repair.service';
 
 type RowRecord = Record<string, any>;
 
@@ -39,6 +75,13 @@ type WorldviewEvidenceSummary = {
   evidenceChars: number;
   fallbackUsed: boolean;
   moduleEvidenceCount: Record<string, number>;
+};
+
+type WorldviewInferenceSummary = {
+  storyPhase: StoryPhaseIntervalInferenceSummary;
+  payoff: PayoffIntervalInferenceSummary;
+  power: PowerIntervalInferenceSummary;
+  traitorStage: TraitorStageIntervalInferenceSummary;
 };
 
 type SourceTextBlockResult = {
@@ -156,6 +199,14 @@ const WORLDVIEW_DEFAULT_MODEL_CANDIDATES = [
 @Injectable()
 export class PipelineWorldviewService {
   private readonly qualityChecker = new WorldviewQualityChecker();
+  private readonly storyPhaseInference = new WorldviewStoryPhaseInference();
+  private readonly payoffInference = new WorldviewPayoffIntervalInference();
+  private readonly powerInference = new WorldviewPowerIntervalInference();
+  private readonly traitorStageInference = new WorldviewTraitorStageIntervalInference();
+  private readonly crossTableAlignmentChecker = new WorldviewCrossTableAlignmentChecker();
+  private readonly validationOrchestrator = new WorldviewValidationOrchestrator();
+  private readonly repairPlanner = new WorldviewRepairPlanner();
+  private readonly moduleRepairService = new WorldviewModuleRepairService();
 
   constructor(
     private readonly dataSource: DataSource,
@@ -177,8 +228,28 @@ export class PipelineWorldviewService {
     const evidenceSummary = this.buildEvidenceSummary(referenceSummary);
     const persistedDraft = await this.loadPersistedWorldviewDraft(novelId);
     const totalChapters = await this.getNovelTotalChapters(novelId);
-    const { qualitySummary, qualityWarnings } = this.qualityChecker.evaluate(persistedDraft, {
+    const optimizedPersistedDraft = this.applyCurrentSchemaOptimization(
+      persistedDraft,
       totalChapters,
+    );
+    const { qualitySummary, qualityWarnings } = this.qualityChecker.evaluate(
+      optimizedPersistedDraft.draft,
+      {
+        totalChapters,
+      },
+    );
+    const mergedWarnings = this.mergeOptimizationWarnings(
+      qualityWarnings,
+      optimizedPersistedDraft.inferenceWarnings,
+      optimizedPersistedDraft.alignmentWarnings,
+    );
+    const validationReportPreview = this.validationOrchestrator.evaluate({
+      draft: optimizedPersistedDraft.draft,
+      promptPreview,
+      qualitySummary,
+      qualityWarnings: mergedWarnings,
+      alignmentWarnings: optimizedPersistedDraft.alignmentWarnings,
+      evidenceSummary,
     });
 
     return {
@@ -188,7 +259,11 @@ export class PipelineWorldviewService {
       referenceSummary,
       evidenceSummary,
       qualitySummary,
-      qualityWarnings,
+      qualityWarnings: mergedWarnings,
+      inferenceSummary: optimizedPersistedDraft.inferenceSummary,
+      alignmentSummary: optimizedPersistedDraft.alignmentSummary,
+      alignmentWarnings: optimizedPersistedDraft.alignmentWarnings,
+      validationReportPreview,
       warnings: warnings.length ? warnings : undefined,
     };
   }
@@ -221,9 +296,103 @@ export class PipelineWorldviewService {
       validationWarnings,
     );
     const totalChapters = await this.getNovelTotalChapters(novelId);
-    const { qualitySummary, qualityWarnings } = this.qualityChecker.evaluate(draft, {
+    let optimizedDraft = this.applyCurrentSchemaOptimization(draft, totalChapters);
+    let { qualitySummary, qualityWarnings } = this.qualityChecker.evaluate(optimizedDraft.draft, {
       totalChapters,
     });
+    let mergedWarnings = this.mergeOptimizationWarnings(
+      qualityWarnings,
+      optimizedDraft.inferenceWarnings,
+      optimizedDraft.alignmentWarnings,
+    );
+    const initialValidationReport = this.validationOrchestrator.evaluate({
+      draft: optimizedDraft.draft,
+      promptPreview: finalPrompt,
+      qualitySummary,
+      qualityWarnings: mergedWarnings,
+      alignmentWarnings: optimizedDraft.alignmentWarnings,
+      evidenceSummary,
+    });
+    const repairPlan = this.repairPlanner.buildPlan(initialValidationReport);
+    let repairApplied = false;
+    let evidenceReselected = false;
+    let finalValidationReport = initialValidationReport;
+    let closureStatus: WorldviewClosureStatus = 'accepted';
+    let repairSummary: WorldviewRepairSummary = {
+      actionType: repairPlan.actionType,
+      targetModules: repairPlan.targetModules,
+      issueCountBefore: initialValidationReport.issues.length,
+      issueCountAfter: initialValidationReport.issues.length,
+      scoreBefore: initialValidationReport.score,
+      scoreAfter: initialValidationReport.score,
+    };
+
+    if (repairPlan.actionType !== 'accept') {
+      repairApplied = true;
+      let repairPrompt = finalPrompt;
+      if (repairPlan.needsEvidenceReselect) {
+        const filtered = this.filterWeakRelevanceEvidence(repairPrompt);
+        repairPrompt = filtered.prompt;
+        evidenceReselected = filtered.removedCount > 0;
+        if (filtered.removedCount > 0) {
+          warnings.push(`Evidence reselection applied, removed ${filtered.removedCount} weak-relevance lines`);
+        }
+      }
+      const repairedDraftRaw = await this.moduleRepairService.apply({
+        draft: optimizedDraft.draft as Record<string, unknown>,
+        plan: repairPlan as WorldviewRepairPlan,
+        issues: initialValidationReport.issues,
+        usedModelKey,
+        promptPreview: repairPrompt,
+        evidenceBlock: this.extractEvidenceBlock(repairPrompt),
+        aiGenerateJson: (modelKey, prompt) => this.callLcAiApi(modelKey, prompt),
+      });
+      const postRepairNormalizationWarnings: string[] = [];
+      const postRepairValidationWarnings: string[] = [];
+      const repairedDraft = await this.validateAndNormalizeWorldviewDraft(
+        novelId,
+        repairedDraftRaw,
+        postRepairNormalizationWarnings,
+        postRepairValidationWarnings,
+      );
+      normalizationWarnings.push(...postRepairNormalizationWarnings);
+      validationWarnings.push(...postRepairValidationWarnings);
+      optimizedDraft = this.applyCurrentSchemaOptimization(repairedDraft, totalChapters);
+      ({ qualitySummary, qualityWarnings } = this.qualityChecker.evaluate(optimizedDraft.draft, {
+        totalChapters,
+      }));
+      mergedWarnings = this.mergeOptimizationWarnings(
+        qualityWarnings,
+        optimizedDraft.inferenceWarnings,
+        optimizedDraft.alignmentWarnings,
+      );
+      finalValidationReport = this.validationOrchestrator.evaluate({
+        draft: optimizedDraft.draft,
+        promptPreview: repairPrompt,
+        qualitySummary,
+        qualityWarnings: mergedWarnings,
+        alignmentWarnings: optimizedDraft.alignmentWarnings,
+        evidenceSummary,
+      });
+      repairSummary = {
+        actionType: repairPlan.actionType,
+        targetModules: repairPlan.targetModules,
+        issueCountBefore: initialValidationReport.issues.length,
+        issueCountAfter: finalValidationReport.issues.length,
+        scoreBefore: initialValidationReport.score,
+        scoreAfter: finalValidationReport.score,
+      };
+    }
+
+    closureStatus = this.resolveClosureStatus(finalValidationReport, repairApplied);
+    const closureResult: WorldviewClosureResult = {
+      closureStatus,
+      repairApplied,
+      evidenceReselected,
+      repairSummary,
+      initialValidationReport,
+      finalValidationReport,
+    };
 
     return {
       usedModelKey,
@@ -231,9 +400,19 @@ export class PipelineWorldviewService {
       referenceTables,
       referenceSummary,
       evidenceSummary,
-      draft,
+      draft: optimizedDraft.draft,
       qualitySummary,
-      qualityWarnings,
+      qualityWarnings: mergedWarnings,
+      inferenceSummary: optimizedDraft.inferenceSummary,
+      alignmentSummary: optimizedDraft.alignmentSummary,
+      alignmentWarnings: optimizedDraft.alignmentWarnings,
+      validationReport: finalValidationReport,
+      initialValidationReport: closureResult.initialValidationReport,
+      finalValidationReport: closureResult.finalValidationReport,
+      repairSummary: closureResult.repairSummary,
+      closureStatus: closureResult.closureStatus,
+      repairApplied: closureResult.repairApplied,
+      evidenceReselected: closureResult.evidenceReselected,
       warnings: warnings.length ? warnings : undefined,
       normalizationWarnings: normalizationWarnings.length
         ? normalizationWarnings
@@ -255,20 +434,50 @@ export class PipelineWorldviewService {
       validationWarnings,
     );
     const totalChapters = await this.getNovelTotalChapters(novelId);
-    const { qualitySummary, qualityWarnings } = this.qualityChecker.evaluate(draft, {
-      totalChapters,
+    const optimizedDraft = this.applyCurrentSchemaOptimization(draft, totalChapters);
+    const { qualitySummary, qualityWarnings } = this.qualityChecker.evaluate(
+      optimizedDraft.draft,
+      {
+        totalChapters,
+      },
+    );
+    const mergedWarnings = this.mergeOptimizationWarnings(
+      qualityWarnings,
+      optimizedDraft.inferenceWarnings,
+      optimizedDraft.alignmentWarnings,
+    );
+    const validationReport = this.validationOrchestrator.evaluate({
+      draft: optimizedDraft.draft,
+      promptPreview: '',
+      qualitySummary,
+      qualityWarnings: mergedWarnings,
+      alignmentWarnings: optimizedDraft.alignmentWarnings,
+      evidenceSummary: null,
     });
+    const closureStatus = this.resolveClosureStatus(validationReport, false);
+    if (validationReport.fatalCount > 0) {
+      validationWarnings.push(
+        `Fatal validation issues detected before persist: ${validationReport.fatalCount}. Persist continues with low confidence.`,
+      );
+    }
 
     const summary = await this.dataSource.transaction(async (manager) => {
       await this.deleteExistingWorldviewData(novelId, manager);
-      return this.insertWorldviewDraft(novelId, draft, manager);
+      return this.insertWorldviewDraft(novelId, optimizedDraft.draft, manager);
     });
 
     return {
       ok: true,
       summary,
       qualitySummary,
-      qualityWarnings,
+      qualityWarnings: mergedWarnings,
+      inferenceSummary: optimizedDraft.inferenceSummary,
+      alignmentSummary: optimizedDraft.alignmentSummary,
+      alignmentWarnings: optimizedDraft.alignmentWarnings,
+      validationReport,
+      closureStatus,
+      repairApplied: false,
+      evidenceReselected: false,
       normalizationWarnings: normalizationWarnings.length
         ? normalizationWarnings
         : undefined,
@@ -424,10 +633,13 @@ export class PipelineWorldviewService {
       '12. setTraitorSystem.traitors[].threat_desc 必须写该角色如何构成威胁、如何影响战局。',
       '13. setTraitorSystem.stages[].stage_desc 必须写从可疑/潜伏/布局到暴露/反制的阶段推进，不要只写“阶段1/阶段2”。',
       '14. 对手矩阵要体现不同层级或不同威胁方向，不要把所有对手写成一类。',
-      '15. 权力升级阶梯要体现主角身份、能力边界和阶段变化。',
-      '16. 内鬼系统要体现角色伪装、真实身份、使命与阶段推进；即使是“非典型内鬼”也需写清被纳入内鬼系统的理由。',
-      '17. 故事发展阶段要体现历史走向与改写走向的对照，historical_path 与 rewrite_path 不能复读。',
-      '18. 如证据不足，也要优先结合已有证据补全关键逻辑，不要轻易留空。',
+      '15. setOpponentMatrix.opponents[].level_name 不能写“层级1/层级2”，要写威胁层级或类别（如军事威胁/情报威胁/内鬼风险层/政治威胁层）。',
+      '16. setOpponentMatrix.opponents[].opponent_name 不能写“对手1/对手2”，必须写具体人物或势力名称。',
+      '17. setOpponentMatrix.opponents[].threat_type 不允许为空，必须写威胁方式（如军事碾压/情报泄露/决策干扰/身份暴露风险）。',
+      '18. 权力升级阶梯要体现主角身份、能力边界和阶段变化。',
+      '19. 内鬼系统要体现角色伪装、真实身份、使命与阶段推进；即使是“非典型内鬼”也需写清被纳入内鬼系统的理由。',
+      '20. 故事发展阶段要体现历史走向与改写走向的对照，historical_path 与 rewrite_path 不能复读。',
+      '21. 如证据不足，也要优先结合已有证据补全关键逻辑，不要轻易留空。',
     ].join('\n');
 
     const outputBlock = [
@@ -955,6 +1167,215 @@ export class PipelineWorldviewService {
     return draft;
   }
 
+  private applyCurrentSchemaOptimization<T extends WorldviewDraft | WorldviewDraftShape>(
+    draft: T,
+    totalChapters: number | null,
+  ): {
+    draft: T;
+    inferenceSummary: WorldviewInferenceSummary;
+    inferenceWarnings: Array<
+      | StoryPhaseInferenceWarning
+      | PayoffInferenceWarning
+      | PowerInferenceWarning
+      | TraitorStageInferenceWarning
+    >;
+    alignmentSummary: WorldviewAlignmentSummary;
+    alignmentWarnings: WorldviewAlignmentWarning[];
+  } {
+    const storyInference = this.storyPhaseInference.apply({
+      storyPhases: draft.setStoryPhases,
+      totalChapters,
+    });
+    const withStory = {
+      ...draft,
+      setStoryPhases: storyInference.storyPhases.map((item, index) => ({
+        ...item,
+        sort_order:
+          (draft as WorldviewDraft).setStoryPhases?.[index]?.sort_order ?? index,
+      })),
+    } as WorldviewDraft;
+
+    const payoffInference = this.payoffInference.apply({
+      lines: withStory.setPayoffArch.lines,
+      storyPhases: withStory.setStoryPhases,
+      totalChapters,
+    });
+    withStory.setPayoffArch = {
+      ...withStory.setPayoffArch,
+      lines: payoffInference.lines.map((item, index) => ({
+        line_key:
+          withStory.setPayoffArch.lines?.[index]?.line_key ??
+          `line_${index + 1}`,
+        ...item,
+        sort_order:
+          withStory.setPayoffArch.lines?.[index]?.sort_order ?? index,
+      })),
+    };
+
+    const powerInference = this.powerInference.apply({
+      powerLadder: withStory.setPowerLadder,
+      storyPhases: withStory.setStoryPhases,
+      totalChapters,
+    });
+    withStory.setPowerLadder = powerInference.powerLadder.map((item, index) => ({
+      ...item,
+      sort_order:
+        withStory.setPowerLadder?.[index]?.sort_order ?? index,
+    }));
+
+    const traitorStageInference = this.traitorStageInference.apply({
+      stages: withStory.setTraitorSystem.stages,
+      storyPhases: withStory.setStoryPhases,
+      totalChapters,
+    });
+    withStory.setTraitorSystem = {
+      ...withStory.setTraitorSystem,
+      stages: traitorStageInference.stages.map((item, index) => ({
+        ...item,
+        sort_order:
+          withStory.setTraitorSystem.stages?.[index]?.sort_order ?? index,
+      })),
+    };
+
+    withStory.setOpponentMatrix = {
+      ...withStory.setOpponentMatrix,
+      opponents: withStory.setOpponentMatrix.opponents.map((item, index) =>
+        this.hardenOpponentFields(item, index),
+      ),
+    };
+
+    const { alignmentSummary, alignmentWarnings } = this.crossTableAlignmentChecker.evaluate({
+      totalChapters,
+      setPayoffArch: withStory.setPayoffArch,
+      setOpponentMatrix: withStory.setOpponentMatrix,
+      setPowerLadder: withStory.setPowerLadder,
+      setTraitorSystem: withStory.setTraitorSystem,
+      setStoryPhases: withStory.setStoryPhases,
+    });
+
+    return {
+      draft: withStory as T,
+      inferenceSummary: {
+        storyPhase: storyInference.summary,
+        payoff: payoffInference.summary,
+        power: powerInference.summary,
+        traitorStage: traitorStageInference.summary,
+      },
+      inferenceWarnings: [
+        ...storyInference.warnings,
+        ...payoffInference.warnings,
+        ...powerInference.warnings,
+        ...traitorStageInference.warnings,
+      ],
+      alignmentSummary,
+      alignmentWarnings,
+    };
+  }
+
+  private mergeOptimizationWarnings(
+    qualityWarnings: WorldviewQualityWarning[],
+    inferenceWarnings: Array<
+      | StoryPhaseInferenceWarning
+      | PayoffInferenceWarning
+      | PowerInferenceWarning
+      | TraitorStageInferenceWarning
+    >,
+    alignmentWarnings: WorldviewAlignmentWarning[],
+  ): WorldviewQualityWarning[] {
+    if (!inferenceWarnings.length && !alignmentWarnings.length) {
+      return qualityWarnings;
+    }
+    const merged = [...qualityWarnings];
+    inferenceWarnings.forEach((item) => {
+      const moduleKey = this.resolveModuleKeyByPath(item.path);
+      merged.push({
+        moduleKey,
+        path: item.path,
+        severity: item.severity,
+        reason: `${item.reason} (auto-fixed/inferred)`,
+      });
+    });
+    alignmentWarnings.forEach((item) => {
+      merged.push({
+        moduleKey: item.moduleKey,
+        path: item.path,
+        severity: item.severity,
+        reason: `${item.reason} (cross-table alignment)`,
+      });
+    });
+    return merged;
+  }
+
+  private resolveModuleKeyByPath(path: string): WorldviewQualityWarning['moduleKey'] {
+    if (path.startsWith('setPayoffArch.lines')) return 'payoff';
+    if (path.startsWith('setPowerLadder')) return 'power';
+    if (path.startsWith('setTraitorSystem')) return 'traitor';
+    if (path.startsWith('setOpponentMatrix')) return 'opponents';
+    return 'story_phase';
+  }
+
+  private hardenOpponentFields(
+    row: WorldviewDraft['setOpponentMatrix']['opponents'][number],
+    index: number,
+  ): WorldviewDraft['setOpponentMatrix']['opponents'][number] {
+    const desc = this.normalizeText(row.detailed_desc);
+    const currentThreat = this.normalizeText(row.threat_type);
+    const currentLevel = this.normalizeText(row.level_name);
+    const currentName = this.normalizeText(row.opponent_name);
+
+    let levelName = currentLevel;
+    if (/^(层级|分类)\d+$/u.test(levelName)) {
+      levelName = this.inferOpponentLevel(desc, currentThreat) || `威胁层${index + 1}`;
+    }
+
+    let opponentName = currentName;
+    if (/^(对手|角色)\d+$/u.test(opponentName) || !opponentName) {
+      opponentName =
+        this.inferOpponentName(desc) ||
+        this.inferOpponentName(currentThreat) ||
+        `关键威胁角色${index + 1}`;
+    }
+
+    let threatType = currentThreat;
+    if (!threatType) {
+      threatType = this.inferThreatType(desc) || '复合威胁';
+    }
+
+    return {
+      ...row,
+      level_name: levelName,
+      opponent_name: opponentName,
+      threat_type: threatType,
+    };
+  }
+
+  private inferOpponentName(text: string): string | null {
+    if (!text) return null;
+    const candidates = ['朱棣', '姚广孝', '李景隆', '黄子澄', '齐泰', '建文帝', '朱允炆', '燕王府', '朝堂保守派'];
+    for (const candidate of candidates) {
+      if (text.includes(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  private inferOpponentLevel(desc: string, threatType: string): string | null {
+    const text = `${desc} ${threatType}`;
+    if (/军事|兵权|战场|北军|南军/u.test(text)) return '军事威胁层';
+    if (/情报|泄密|渗透|内应|暗线/u.test(text)) return '情报渗透层';
+    if (/朝堂|决策|重臣|政治/u.test(text)) return '政治决策层';
+    if (/身份|暴露|信任危机/u.test(text)) return '身份危机层';
+    return null;
+  }
+
+  private inferThreatType(text: string): string | null {
+    if (!text) return null;
+    if (/军事|兵权|战场|起兵/u.test(text)) return '军事威胁';
+    if (/情报|泄密|渗透|暗线|内应/u.test(text)) return '情报威胁';
+    if (/身份|暴露|伪装/u.test(text)) return '身份危机';
+    if (/决策|误导|拖后腿|掣肘/u.test(text)) return '决策干扰';
+    return null;
+  }
+
   private applyTraitorIdentityFallback(
     draft: WorldviewDraft,
     characterHints: Map<string, { publicIdentity: string | null; realIdentity: string | null }>,
@@ -1120,6 +1541,9 @@ export class PipelineWorldviewService {
           .map((row) => ({
             line_name: this.normalizeText(row.line_name),
             line_content: this.normalizeText(row.line_content),
+            start_ep: this.normalizeOptionalInt(row.start_ep),
+            end_ep: this.normalizeOptionalInt(row.end_ep),
+            stage_text: this.normalizeNullableText(row.stage_text),
           })),
       },
       setOpponentMatrix: {
@@ -1132,6 +1556,8 @@ export class PipelineWorldviewService {
               : this.normalizeOptionalInt(row.opponent_matrix_id) === opponentMatrixId,
           )
           .map((row) => ({
+            level_name: this.normalizeText(row.level_name),
+            opponent_name: this.normalizeText(row.opponent_name),
             threat_type: this.normalizeNullableText(row.threat_type),
             detailed_desc: this.normalizeNullableText(row.detailed_desc),
           })),
@@ -1140,6 +1566,8 @@ export class PipelineWorldviewService {
         level_title: this.normalizeText(row.level_title),
         identity_desc: this.normalizeText(row.identity_desc),
         ability_boundary: this.normalizeText(row.ability_boundary),
+        start_ep: this.normalizeOptionalInt(row.start_ep),
+        end_ep: this.normalizeOptionalInt(row.end_ep),
       })),
       setTraitorSystem: {
         name: this.normalizeText(activeTraitorSystem.name),
@@ -1824,5 +2252,55 @@ export class PipelineWorldviewService {
 
   private summarizeBody(body: string): string {
     return body.replace(/\s+/g, ' ').slice(0, 500);
+  }
+
+  private resolveClosureStatus(
+    report: WorldviewValidationReport,
+    repairApplied: boolean,
+  ): WorldviewClosureStatus {
+    const hasMajorRelevance = report.issues.some(
+      (item) =>
+        item.moduleKey === 'evidence' &&
+        item.severity !== 'minor' &&
+        item.source === 'relevance',
+    );
+    if (!report.fatalCount && report.score >= 80 && !hasMajorRelevance) {
+      return repairApplied ? 'repaired' : 'accepted';
+    }
+    if (!report.fatalCount && report.majorCount <= 2 && report.score >= 75) {
+      return 'repaired';
+    }
+    return 'low_confidence';
+  }
+
+  private extractEvidenceBlock(promptPreview: string): string {
+    const start = promptPreview.indexOf('【原文证据片段');
+    if (start < 0) return '';
+    const tail = promptPreview.slice(start);
+    const nextHeaderIndex = tail.indexOf('\n【用户附加要求】');
+    if (nextHeaderIndex < 0) return tail;
+    return tail.slice(0, nextHeaderIndex).trim();
+  }
+
+  private filterWeakRelevanceEvidence(promptPreview: string): {
+    prompt: string;
+    removedCount: number;
+  } {
+    const weakTerms = ['张士诚', '陈友谅', '蓝玉', '胡惟庸'];
+    const lines = promptPreview.split('\n');
+    let removedCount = 0;
+    const filtered = lines.filter((line) => {
+      if (!line.includes('证据：')) return true;
+      const hit = weakTerms.some((term) => line.includes(term));
+      if (hit) {
+        removedCount += 1;
+        return false;
+      }
+      return true;
+    });
+    return {
+      prompt: filtered.join('\n'),
+      removedCount,
+    };
   }
 }
