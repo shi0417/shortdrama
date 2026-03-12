@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, PipelineOverviewDto } from '@/lib/api'
 import { setCoreApi } from '@/lib/set-core-api'
@@ -13,9 +13,11 @@ import {
   EnhanceSetCoreCurrentFields,
   PipelineEpisodeDurationMode,
   PipelineEpisodeGenerationMode,
+  PipelineEpisodeScriptBatchInfo,
   PipelineEpisodeScriptDraft,
   PipelineEpisodeScriptReferenceSummaryItem,
   PipelineEpisodeScriptReferenceTable,
+  PipelineEpisodeScriptRepairSummary,
   PipelineExtractReferenceTable,
   PipelineWorldviewDraft,
   PipelineWorldviewAlignmentSummary,
@@ -373,6 +375,20 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
   const [episodeScriptCountMismatchWarning, setEpisodeScriptCountMismatchWarning] = useState<
     string | undefined
   >(undefined)
+  const [episodeScriptFinalCompletenessOk, setEpisodeScriptFinalCompletenessOk] = useState<
+    boolean | undefined
+  >(undefined)
+  const [episodeScriptBatchInfo, setEpisodeScriptBatchInfo] = useState<
+    PipelineEpisodeScriptBatchInfo[] | undefined
+  >(undefined)
+  const [episodeScriptFailedBatches, setEpisodeScriptFailedBatches] = useState<
+    Array<{ batchIndex: number; range: string; error?: string }> | undefined
+  >(undefined)
+  const [episodeScriptRepairSummary, setEpisodeScriptRepairSummary] = useState<
+    PipelineEpisodeScriptRepairSummary | undefined
+  >(undefined)
+  const [episodeScriptGeneratingPhase, setEpisodeScriptGeneratingPhase] = useState('')
+  const episodeScriptPhaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadOverview = async () => {
     try {
@@ -966,8 +982,44 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
       alert('请选择 AI 模型')
       return
     }
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[episode-script][generateDraft][frontend][request]', {
+        novelId,
+        modelKey: episodeScriptSelectedModelKey,
+        generationMode: episodeScriptGenerationMode,
+        durationMode: episodeScriptDurationMode,
+        targetEpisodeCount: totalChapters,
+        referenceTableCount: episodeScriptReferenceTables.length,
+      })
+    }
+    const clearPhaseTimer = () => {
+      if (episodeScriptPhaseTimerRef.current) {
+        clearTimeout(episodeScriptPhaseTimerRef.current)
+        episodeScriptPhaseTimerRef.current = null
+      }
+    }
+    const startPseudoPhases = () => {
+      const targetEp = totalChapters || 61
+      const batchSize = 5
+      const estimatedBatches = Math.ceil(targetEp / batchSize)
+      setEpisodeScriptGeneratingPhase('正在生成全集规划（Plan）...')
+      let currentBatch = 0
+      const advanceBatch = () => {
+        currentBatch++
+        if (currentBatch <= estimatedBatches) {
+          setEpisodeScriptGeneratingPhase(
+            `正在分批生成（Batch ${currentBatch} / ${estimatedBatches}）...`
+          )
+          episodeScriptPhaseTimerRef.current = setTimeout(advanceBatch, 25000)
+        } else {
+          setEpisodeScriptGeneratingPhase('正在合并与校验结果...')
+        }
+      }
+      episodeScriptPhaseTimerRef.current = setTimeout(advanceBatch, 15000)
+    }
     try {
       setEpisodeScriptGenerating(true)
+      startPseudoPhases()
       const result = await pipelineEpisodeScriptApi.generateEpisodeScriptDraft(novelId, {
         modelKey: episodeScriptSelectedModelKey,
         referenceTables: episodeScriptReferenceTables,
@@ -992,9 +1044,27 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
       setEpisodeScriptWarnings(result.warnings || [])
       setEpisodeScriptNormalizationWarnings(result.normalizationWarnings || [])
       setEpisodeScriptValidationWarnings(result.validationWarnings || [])
+      setEpisodeScriptFinalCompletenessOk(result.finalCompletenessOk)
+      setEpisodeScriptBatchInfo(result.batchInfo)
+      setEpisodeScriptFailedBatches(result.failedBatches)
+      setEpisodeScriptRepairSummary(result.repairSummary)
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('[episode-script][generateDraft][frontend][response]', {
+          novelId,
+          actualEpisodeCount: result.actualEpisodeCount ?? null,
+          validationWarningCount: (result.validationWarnings || []).length,
+          normalizationWarningCount: (result.normalizationWarnings || []).length,
+          countMismatchWarning: result.countMismatchWarning || null,
+          finalCompletenessOk: result.finalCompletenessOk ?? null,
+          batchCount: result.batchCount ?? null,
+          failedBatchCount: (result.failedBatches || []).length,
+        })
+      }
     } catch (err: any) {
       alert(err?.message || '生成每集纲要/剧本草稿失败')
     } finally {
+      clearPhaseTimer()
+      setEpisodeScriptGeneratingPhase('')
       setEpisodeScriptGenerating(false)
     }
   }
@@ -1004,12 +1074,37 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
       alert('请先生成草稿')
       return
     }
+    if (episodeScriptFinalCompletenessOk === false) {
+      const missingStr = (episodeScriptDraft?.episodePackage?.episodes || []).length
+        ? `实际 ${episodeScriptDraft.episodePackage.episodes.length} 集`
+        : '集数未知'
+      const confirmed = window.confirm(
+        `⚠️ 草稿不完整（${missingStr}，目标 ${episodeScriptTargetEpisodeCount || '?'} 集）\n\n` +
+        `缺失集号可能导致数据不完整。确定要强制写入数据库吗？`
+      )
+      if (!confirmed) return
+    }
     try {
       setEpisodeScriptPersisting(true)
-      const result = await pipelineEpisodeScriptApi.persistEpisodeScriptDraft(novelId, {
+      const persistPayload = {
         draft: episodeScriptDraft,
         generationMode: episodeScriptGenerationMode,
-      })
+      }
+      if (process.env.NODE_ENV !== 'production') {
+        const payloadJson = JSON.stringify(persistPayload)
+        const payloadChars = payloadJson.length
+        const payloadBytes = new Blob([payloadJson]).size
+        console.info('[episode-script][persist][frontend][payload]', {
+          novelId,
+          generationMode: episodeScriptGenerationMode,
+          payloadChars,
+          payloadBytes,
+          payloadMB: (payloadBytes / 1024 / 1024).toFixed(2),
+          targetEpisodeCount: episodeScriptTargetEpisodeCount ?? null,
+          actualEpisodeCount: episodeScriptDraft?.episodePackage?.episodes?.length ?? null,
+        })
+      }
+      const result = await pipelineEpisodeScriptApi.persistEpisodeScriptDraft(novelId, persistPayload)
       setEpisodeScriptWarnings(result.warnings || [])
       setEpisodeScriptNormalizationWarnings(result.normalizationWarnings || [])
       setEpisodeScriptValidationWarnings(result.validationWarnings || [])
@@ -2113,6 +2208,11 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
         warnings={episodeScriptWarnings}
         normalizationWarnings={episodeScriptNormalizationWarnings}
         validationWarnings={episodeScriptValidationWarnings}
+        finalCompletenessOk={episodeScriptFinalCompletenessOk}
+        batchInfo={episodeScriptBatchInfo}
+        failedBatches={episodeScriptFailedBatches}
+        repairSummary={episodeScriptRepairSummary}
+        generatingPhase={episodeScriptGeneratingPhase}
         onClose={() => {
           setEpisodeScriptDialogOpen(false)
           setEpisodeScriptDraft(null)
@@ -2120,6 +2220,10 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
           setEpisodeScriptTargetEpisodeCount(undefined)
           setEpisodeScriptActualEpisodeCount(undefined)
           setEpisodeScriptCountMismatchWarning(undefined)
+          setEpisodeScriptFinalCompletenessOk(undefined)
+          setEpisodeScriptBatchInfo(undefined)
+          setEpisodeScriptFailedBatches(undefined)
+          setEpisodeScriptRepairSummary(undefined)
         }}
         onChangeModelKey={(value) => {
           setEpisodeScriptSelectedModelKey(value)

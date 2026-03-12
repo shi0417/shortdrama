@@ -541,6 +541,37 @@ export interface PipelineEpisodeScriptPreviewResponse {
   warnings?: string[]
 }
 
+export interface PipelineEpisodeScriptBatchInfo {
+  batchIndex: number
+  range: string
+  success: boolean
+  retried: boolean
+  repaired: boolean
+  episodeCount: number
+  elapsedMs: number
+  error?: string
+}
+
+export interface PipelineEpisodeScriptPlanSummary {
+  planEpisodeCount: number
+  planMissingCount: number
+  planElapsedMs: number
+  planRepaired?: boolean
+}
+
+export interface PipelineEpisodeScriptRepairSummary {
+  planRepaired: boolean
+  repairedBatches: number
+  finalMissingRepairApplied?: boolean
+}
+
+export interface PipelineEpisodeScriptLayerUsage {
+  layersUsed: string[]
+  tablesUsed: string[]
+  tablesSkipped: string[]
+  dynamicHits?: Record<string, number>
+}
+
 export interface PipelineEpisodeScriptGenerateDraftResponse {
   usedModelKey: string
   generationMode: string
@@ -555,6 +586,13 @@ export interface PipelineEpisodeScriptGenerateDraftResponse {
   warnings?: string[]
   normalizationWarnings?: string[]
   validationWarnings?: string[]
+  planSummary?: PipelineEpisodeScriptPlanSummary
+  batchCount?: number
+  batchInfo?: PipelineEpisodeScriptBatchInfo[]
+  failedBatches?: Array<{ batchIndex: number; range: string; error?: string }>
+  finalCompletenessOk?: boolean
+  layerUsageSummary?: { plan: PipelineEpisodeScriptLayerUsage; batch: PipelineEpisodeScriptLayerUsage }
+  repairSummary?: PipelineEpisodeScriptRepairSummary
 }
 
 export interface PipelineEpisodeScriptPersistPayload {
