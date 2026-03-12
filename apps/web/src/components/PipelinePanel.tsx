@@ -7,9 +7,15 @@ import { setCoreApi } from '@/lib/set-core-api'
 import { pipelineAiApi } from '@/lib/pipeline-ai-api'
 import { pipelineReviewApi } from '@/lib/pipeline-review-api'
 import { pipelineWorldviewApi } from '@/lib/pipeline-worldview-api'
+import { pipelineEpisodeScriptApi } from '@/lib/pipeline-episode-script-api'
 import {
   AiModelOptionDto,
   EnhanceSetCoreCurrentFields,
+  PipelineEpisodeDurationMode,
+  PipelineEpisodeGenerationMode,
+  PipelineEpisodeScriptDraft,
+  PipelineEpisodeScriptReferenceSummaryItem,
+  PipelineEpisodeScriptReferenceTable,
   PipelineExtractReferenceTable,
   PipelineWorldviewDraft,
   PipelineWorldviewAlignmentSummary,
@@ -38,11 +44,13 @@ import SetCoreEnhanceDialog from './pipeline/SetCoreEnhanceDialog'
 import PipelineExtractDialog from './pipeline/PipelineExtractDialog'
 import PipelineSecondReviewDialog from './pipeline/PipelineSecondReviewDialog'
 import PipelineWorldviewDialog from './pipeline/PipelineWorldviewDialog'
+import PipelineEpisodeScriptDialog from './pipeline/PipelineEpisodeScriptDialog'
 import PipelineDataSection from './pipeline/PipelineDataSection'
 
 interface PipelinePanelProps {
   novelId: number
   novelName: string
+  totalChapters?: number
 }
 
 type ModuleAction = 'generate' | 'edit' | 'save'
@@ -144,6 +152,20 @@ const defaultWorldviewReferenceTables: PipelineWorldviewReferenceTable[] = [
   'novel_explosions',
 ]
 
+const defaultEpisodeScriptReferenceTables: PipelineEpisodeScriptReferenceTable[] = [
+  'drama_novels',
+  'novel_source_segments',
+  'novel_adaptation_strategy',
+  'adaptation_modes',
+  'set_core',
+  'novel_timelines',
+  'novel_characters',
+  'novel_key_nodes',
+  'novel_explosions',
+  'novel_skeleton_topics',
+  'novel_skeleton_topic_items',
+]
+
 const worldviewDefaultModelCandidates = [
   'claude-3-7-sonnet-20250219',
   'claude-3-5-sonnet-20241022',
@@ -171,7 +193,7 @@ function isSafeWorldviewModel(model: AiModelOptionDto): boolean {
   )
 }
 
-export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps) {
+export default function PipelinePanel({ novelId, novelName, totalChapters }: PipelinePanelProps) {
   const router = useRouter()
   const [step1Expanded, setStep1Expanded] = useState(true)
   const [step2Expanded, setStep2Expanded] = useState(true)
@@ -309,6 +331,48 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
   const [worldviewWarnings, setWorldviewWarnings] = useState<string[]>([])
   const [worldviewNormalizationWarnings, setWorldviewNormalizationWarnings] = useState<string[]>([])
   const [worldviewValidationWarnings, setWorldviewValidationWarnings] = useState<string[]>([])
+  const [episodeScriptDialogOpen, setEpisodeScriptDialogOpen] = useState(false)
+  const [episodeScriptModels, setEpisodeScriptModels] = useState<AiModelOptionDto[]>([])
+  const [episodeScriptLoading, setEpisodeScriptLoading] = useState(false)
+  const [episodeScriptGenerating, setEpisodeScriptGenerating] = useState(false)
+  const [episodeScriptPersisting, setEpisodeScriptPersisting] = useState(false)
+  const [episodeScriptSelectedModelKey, setEpisodeScriptSelectedModelKey] = useState('')
+  const [episodeScriptDurationMode, setEpisodeScriptDurationMode] =
+    useState<PipelineEpisodeDurationMode>('60s')
+  const [episodeScriptGenerationMode, setEpisodeScriptGenerationMode] =
+    useState<PipelineEpisodeGenerationMode>('outline_and_script')
+  const [episodeScriptReferenceTables, setEpisodeScriptReferenceTables] =
+    useState<PipelineEpisodeScriptReferenceTable[]>(defaultEpisodeScriptReferenceTables)
+  const [episodeScriptUserInstruction, setEpisodeScriptUserInstruction] = useState('')
+  const [episodeScriptAllowPromptEdit, setEpisodeScriptAllowPromptEdit] = useState(false)
+  const [episodeScriptPromptPreview, setEpisodeScriptPromptPreview] = useState('')
+  const [episodeScriptFontSize, setEpisodeScriptFontSize] = useState(14)
+  const [episodeScriptSourceTextCharBudget, setEpisodeScriptSourceTextCharBudget] = useState(30000)
+  const [episodeScriptReferenceSummary, setEpisodeScriptReferenceSummary] = useState<
+    PipelineEpisodeScriptReferenceSummaryItem[]
+  >([])
+  const [episodeScriptDraft, setEpisodeScriptDraft] = useState<PipelineEpisodeScriptDraft | null>(
+    null
+  )
+  const [episodeScriptWarnings, setEpisodeScriptWarnings] = useState<string[]>([])
+  const [episodeScriptNormalizationWarnings, setEpisodeScriptNormalizationWarnings] = useState<
+    string[]
+  >([])
+  const [episodeScriptValidationWarnings, setEpisodeScriptValidationWarnings] = useState<
+    string[]
+  >([])
+  const [episodeScriptDraftGenerationMode, setEpisodeScriptDraftGenerationMode] = useState<
+    string | undefined
+  >(undefined)
+  const [episodeScriptTargetEpisodeCount, setEpisodeScriptTargetEpisodeCount] = useState<
+    number | undefined
+  >(undefined)
+  const [episodeScriptActualEpisodeCount, setEpisodeScriptActualEpisodeCount] = useState<
+    number | undefined
+  >(undefined)
+  const [episodeScriptCountMismatchWarning, setEpisodeScriptCountMismatchWarning] = useState<
+    string | undefined
+  >(undefined)
 
   const loadOverview = async () => {
     try {
@@ -813,6 +877,150 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
       alert(err?.message || '写入世界观草稿失败')
     } finally {
       setWorldviewPersisting(false)
+    }
+  }
+
+  const loadEpisodeScriptModels = async () => {
+    const models = await pipelineAiApi.listAiModelOptions()
+    const safeModels = (models || []).filter(isSafeWorldviewModel)
+    setEpisodeScriptModels(safeModels)
+    return safeModels
+  }
+
+  const refreshEpisodeScriptPromptPreview = async (modelKey?: string) => {
+    const resolvedModelKey = modelKey || episodeScriptSelectedModelKey
+    if (!resolvedModelKey) {
+      return
+    }
+    try {
+      setEpisodeScriptLoading(true)
+      const preview = await pipelineEpisodeScriptApi.previewEpisodeScriptPrompt(novelId, {
+        modelKey: resolvedModelKey,
+        referenceTables: episodeScriptReferenceTables,
+        userInstruction: episodeScriptUserInstruction || undefined,
+        allowPromptEdit: episodeScriptAllowPromptEdit,
+        promptOverride:
+          episodeScriptAllowPromptEdit && episodeScriptPromptPreview.trim()
+            ? episodeScriptPromptPreview
+            : undefined,
+        sourceTextCharBudget: episodeScriptSourceTextCharBudget,
+        durationMode: episodeScriptDurationMode,
+        generationMode: episodeScriptGenerationMode,
+        targetEpisodeCount: totalChapters,
+      })
+      setEpisodeScriptPromptPreview(preview.promptPreview || '')
+      setEpisodeScriptReferenceSummary(preview.referenceSummary || [])
+      setEpisodeScriptWarnings(preview.warnings || [])
+      if (!episodeScriptSelectedModelKey && preview.usedModelKey) {
+        setEpisodeScriptSelectedModelKey(preview.usedModelKey)
+      }
+    } catch (err: any) {
+      alert(err?.message || '生成每集纲要/剧本 Prompt 预览失败')
+    } finally {
+      setEpisodeScriptLoading(false)
+    }
+  }
+
+  const handleOpenEpisodeScriptDialog = async () => {
+    try {
+      setEpisodeScriptDialogOpen(true)
+      setEpisodeScriptDraft(null)
+      setEpisodeScriptWarnings([])
+      setEpisodeScriptNormalizationWarnings([])
+      setEpisodeScriptValidationWarnings([])
+      setEpisodeScriptReferenceSummary([])
+
+      let resolvedModelKey = episodeScriptSelectedModelKey
+      let models = episodeScriptModels
+      if (!models.length) {
+        models = await loadEpisodeScriptModels()
+      }
+      if (!models.length) {
+        alert('未找到可用文本模型，请先配置模型')
+        return
+      }
+      if (resolvedModelKey && !models.some((item) => item.modelKey === resolvedModelKey)) {
+        resolvedModelKey = ''
+      }
+      if (!resolvedModelKey) {
+        resolvedModelKey = models[0].modelKey
+        setEpisodeScriptSelectedModelKey(resolvedModelKey)
+      }
+      if (!episodeScriptReferenceTables.length) {
+        setEpisodeScriptReferenceTables(defaultEpisodeScriptReferenceTables)
+      }
+      await refreshEpisodeScriptPromptPreview(resolvedModelKey)
+    } catch (err: any) {
+      alert(err?.message || '打开每集纲要/剧本弹窗失败')
+    }
+  }
+
+  const handleToggleEpisodeScriptReferenceTable = (table: PipelineEpisodeScriptReferenceTable) => {
+    setEpisodeScriptReferenceTables((prev) =>
+      prev.includes(table) ? prev.filter((item) => item !== table) : [...prev, table]
+    )
+  }
+
+  const handleGenerateEpisodeScriptDraft = async () => {
+    if (!episodeScriptSelectedModelKey) {
+      alert('请选择 AI 模型')
+      return
+    }
+    try {
+      setEpisodeScriptGenerating(true)
+      const result = await pipelineEpisodeScriptApi.generateEpisodeScriptDraft(novelId, {
+        modelKey: episodeScriptSelectedModelKey,
+        referenceTables: episodeScriptReferenceTables,
+        userInstruction: episodeScriptUserInstruction || undefined,
+        allowPromptEdit: episodeScriptAllowPromptEdit,
+        promptOverride:
+          episodeScriptAllowPromptEdit && episodeScriptPromptPreview.trim()
+            ? episodeScriptPromptPreview
+            : undefined,
+        sourceTextCharBudget: episodeScriptSourceTextCharBudget,
+        durationMode: episodeScriptDurationMode,
+        generationMode: episodeScriptGenerationMode,
+        targetEpisodeCount: totalChapters,
+      })
+      setEpisodeScriptPromptPreview(result.promptPreview || episodeScriptPromptPreview)
+      setEpisodeScriptReferenceSummary(result.referenceSummary || [])
+      setEpisodeScriptDraft(result.draft || null)
+      setEpisodeScriptDraftGenerationMode(result.generationMode)
+      setEpisodeScriptTargetEpisodeCount(result.targetEpisodeCount)
+      setEpisodeScriptActualEpisodeCount(result.actualEpisodeCount)
+      setEpisodeScriptCountMismatchWarning(result.countMismatchWarning)
+      setEpisodeScriptWarnings(result.warnings || [])
+      setEpisodeScriptNormalizationWarnings(result.normalizationWarnings || [])
+      setEpisodeScriptValidationWarnings(result.validationWarnings || [])
+    } catch (err: any) {
+      alert(err?.message || '生成每集纲要/剧本草稿失败')
+    } finally {
+      setEpisodeScriptGenerating(false)
+    }
+  }
+
+  const handlePersistEpisodeScriptDraft = async () => {
+    if (!episodeScriptDraft) {
+      alert('请先生成草稿')
+      return
+    }
+    try {
+      setEpisodeScriptPersisting(true)
+      const result = await pipelineEpisodeScriptApi.persistEpisodeScriptDraft(novelId, {
+        draft: episodeScriptDraft,
+        generationMode: episodeScriptGenerationMode,
+      })
+      setEpisodeScriptWarnings(result.warnings || [])
+      setEpisodeScriptNormalizationWarnings(result.normalizationWarnings || [])
+      setEpisodeScriptValidationWarnings(result.validationWarnings || [])
+      await loadOverview()
+      alert(
+        `写入成功\nepisodes：${result.summary.episodes}\nstructure templates：${result.summary.structureTemplates}\nhook rhythm：${result.summary.hookRhythm}`
+      )
+    } catch (err: any) {
+      alert(err?.message || '写入每集纲要/剧本失败')
+    } finally {
+      setEpisodeScriptPersisting(false)
     }
   }
 
@@ -1551,6 +1759,20 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
           >
             提炼短剧世界观
           </button>
+          <button
+            onClick={() => void handleOpenEpisodeScriptDialog()}
+            style={{
+              padding: '6px 12px',
+              border: 'none',
+              borderRadius: '4px',
+              background: '#1890ff',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            生成每集纲要和每集剧本
+          </button>
         </div>
       </div>
 
@@ -1866,6 +2088,56 @@ export default function PipelinePanel({ novelId, novelName }: PipelinePanelProps
         onRefreshPromptPreview={() => void refreshWorldviewPromptPreview()}
         onGenerateDraft={() => void handleGenerateWorldviewDraft()}
         onPersistDraft={() => void handlePersistWorldviewDraft()}
+      />
+      <PipelineEpisodeScriptDialog
+        open={episodeScriptDialogOpen}
+        models={episodeScriptModels}
+        loading={episodeScriptLoading}
+        generating={episodeScriptGenerating}
+        persisting={episodeScriptPersisting}
+        selectedModelKey={episodeScriptSelectedModelKey}
+        durationMode={episodeScriptDurationMode}
+        generationMode={episodeScriptGenerationMode}
+        draftGenerationMode={episodeScriptDraftGenerationMode}
+        targetEpisodeCount={episodeScriptTargetEpisodeCount}
+        actualEpisodeCount={episodeScriptActualEpisodeCount}
+        countMismatchWarning={episodeScriptCountMismatchWarning}
+        referenceTables={episodeScriptReferenceTables}
+        userInstruction={episodeScriptUserInstruction}
+        allowPromptEdit={episodeScriptAllowPromptEdit}
+        promptPreview={episodeScriptPromptPreview}
+        fontSize={episodeScriptFontSize}
+        sourceTextCharBudget={episodeScriptSourceTextCharBudget}
+        referenceSummary={episodeScriptReferenceSummary}
+        draft={episodeScriptDraft}
+        warnings={episodeScriptWarnings}
+        normalizationWarnings={episodeScriptNormalizationWarnings}
+        validationWarnings={episodeScriptValidationWarnings}
+        onClose={() => {
+          setEpisodeScriptDialogOpen(false)
+          setEpisodeScriptDraft(null)
+          setEpisodeScriptDraftGenerationMode(undefined)
+          setEpisodeScriptTargetEpisodeCount(undefined)
+          setEpisodeScriptActualEpisodeCount(undefined)
+          setEpisodeScriptCountMismatchWarning(undefined)
+        }}
+        onChangeModelKey={(value) => {
+          setEpisodeScriptSelectedModelKey(value)
+          if (!episodeScriptAllowPromptEdit && value) {
+            void refreshEpisodeScriptPromptPreview(value)
+          }
+        }}
+        onChangeDurationMode={setEpisodeScriptDurationMode}
+        onChangeGenerationMode={setEpisodeScriptGenerationMode}
+        onToggleReferenceTable={handleToggleEpisodeScriptReferenceTable}
+        onChangeUserInstruction={setEpisodeScriptUserInstruction}
+        onChangeAllowPromptEdit={setEpisodeScriptAllowPromptEdit}
+        onChangePromptPreview={setEpisodeScriptPromptPreview}
+        onChangeFontSize={setEpisodeScriptFontSize}
+        onChangeSourceTextCharBudget={setEpisodeScriptSourceTextCharBudget}
+        onRefreshPromptPreview={() => void refreshEpisodeScriptPromptPreview()}
+        onGenerateDraft={() => void handleGenerateEpisodeScriptDraft()}
+        onPersistDraft={() => void handlePersistEpisodeScriptDraft()}
       />
     </div>
   )

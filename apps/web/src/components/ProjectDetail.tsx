@@ -324,7 +324,7 @@ export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: Pro
         ) : activeTab === 'source' ? (
           <SourceTextManager novelId={novel.id} />
         ) : (
-          <PipelinePanel novelId={novel.id} novelName={novel.novelsName} />
+          <PipelinePanel novelId={novel.id} novelName={novel.novelsName} totalChapters={novel.totalChapters} />
         )}
       </div>
     </div>

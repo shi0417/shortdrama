@@ -431,6 +431,154 @@ export interface PipelineWorldviewPersistResponse {
   evidenceReselected?: boolean
 }
 
+export type PipelineEpisodeScriptReferenceTable =
+  | 'drama_novels'
+  | 'drama_source_text'
+  | 'novel_source_segments'
+  | 'novel_adaptation_strategy'
+  | 'adaptation_modes'
+  | 'set_core'
+  | 'novel_timelines'
+  | 'novel_characters'
+  | 'novel_key_nodes'
+  | 'novel_explosions'
+  | 'novel_skeleton_topics'
+  | 'novel_skeleton_topic_items'
+  | 'set_payoff_arch'
+  | 'set_payoff_lines'
+  | 'set_opponent_matrix'
+  | 'set_opponents'
+  | 'set_power_ladder'
+  | 'set_traitor_system'
+  | 'set_traitors'
+  | 'set_traitor_stages'
+  | 'set_story_phases'
+
+export type PipelineEpisodeDurationMode = '60s' | '90s'
+export type PipelineEpisodeGenerationMode =
+  | 'outline_only'
+  | 'outline_and_script'
+  | 'overwrite_existing'
+
+export interface PipelineEpisodeScriptReferenceSummaryItem {
+  table: PipelineEpisodeScriptReferenceTable
+  label: string
+  rowCount: number
+  fields: string[]
+  note?: string
+  usedChars?: number
+}
+
+export interface PipelineEpisodeScriptEpisodeItem {
+  episodeNumber: number
+  episodeTitle: string
+  sortOrder: number
+  outline: {
+    arc: string
+    opening: string
+    coreConflict: string
+    historyOutline: string
+    rewriteDiff: string
+    outlineContent: string
+  }
+  script: {
+    hooks: string
+    cliffhanger: string
+    fullContent: string
+  }
+  structureTemplate: {
+    chapterId: number
+    themeType: string
+    structureName: string
+    powerLevel: number
+    isPowerUpChapter: number
+    powerUpContent: string
+    identityGap: string
+    pressureSource: string
+    firstReverse: string
+    continuousUpgrade: string
+    suspenseHook: string
+    typicalOpening: string
+    suitableTheme: string
+    hotLevel: number
+    remarks: string
+  }
+  hookRhythm: {
+    episodeNumber: number
+    emotionLevel: number
+    hookType: string
+    description: string
+    cliffhanger: string
+  }
+}
+
+export interface PipelineEpisodeScriptDraft {
+  episodePackage: {
+    version: string
+    novelId: number
+    durationMode: PipelineEpisodeDurationMode
+    episodes: PipelineEpisodeScriptEpisodeItem[]
+  }
+}
+
+export interface PipelineEpisodeScriptRequest {
+  modelKey?: string
+  referenceTables: PipelineEpisodeScriptReferenceTable[]
+  userInstruction?: string
+  allowPromptEdit?: boolean
+  promptOverride?: string
+  sourceTextCharBudget?: number
+  durationMode?: PipelineEpisodeDurationMode
+  generationMode?: PipelineEpisodeGenerationMode
+  targetEpisodeCount?: number
+}
+
+export interface PipelineEpisodeScriptPreviewResponse {
+  promptPreview: string
+  usedModelKey: string
+  referenceTables: PipelineEpisodeScriptReferenceTable[]
+  referenceSummary: PipelineEpisodeScriptReferenceSummaryItem[]
+  warnings?: string[]
+}
+
+export interface PipelineEpisodeScriptGenerateDraftResponse {
+  usedModelKey: string
+  generationMode: string
+  promptPreview: string
+  referenceTables: PipelineEpisodeScriptReferenceTable[]
+  referenceSummary: PipelineEpisodeScriptReferenceSummaryItem[]
+  draft: PipelineEpisodeScriptDraft
+  targetEpisodeCount?: number
+  actualEpisodeCount?: number
+  missingEpisodeNumbers?: number[]
+  countMismatchWarning?: string
+  warnings?: string[]
+  normalizationWarnings?: string[]
+  validationWarnings?: string[]
+}
+
+export interface PipelineEpisodeScriptPersistPayload {
+  draft: PipelineEpisodeScriptDraft
+  generationMode?: PipelineEpisodeGenerationMode
+}
+
+export interface PipelineEpisodeScriptPersistResponse {
+  ok: true
+  summary: {
+    episodes: number
+    structureTemplates: number
+    hookRhythm: number
+    generationMode: string
+    episodeNumbers: number[]
+    affectedTables: string[]
+    skippedTables: string[]
+    overwriteScopeDescription: string
+  }
+  warnings?: string[]
+  normalizationWarnings?: string[]
+  validationWarnings?: string[]
+}
+
 export type PipelineWorldviewValidationSeverity = 'fatal' | 'major' | 'minor'
 export type PipelineWorldviewValidationSource = 'structure' | 'semantic' | 'relevance' | 'alignment'
 export type PipelineWorldviewRepairStrategy = 'fix_in_place' | 'regenerate_module' | 'reselect_evidence'
