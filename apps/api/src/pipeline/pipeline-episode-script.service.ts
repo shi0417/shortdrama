@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import {
   EpisodeDurationMode,
@@ -230,14 +230,72 @@ type LayerUsageRecord = {
   dynamicHits?: Record<string, number>;
 };
 
+interface CachedEpisodeScriptDraft {
+  novelId: number;
+  generationMode: string;
+  draft: any;
+  createdAt: number;
+}
+
 @Injectable()
 export class PipelineEpisodeScriptService {
   private readonly logger = new Logger(PipelineEpisodeScriptService.name);
+  private readonly draftCache = new Map<string, CachedEpisodeScriptDraft>();
+  private readonly DRAFT_CACHE_TTL_MS = 30 * 60 * 1000;
+  private readonly MAX_CACHED_DRAFTS = 50;
 
   constructor(
     private readonly dataSource: DataSource,
     private readonly sourceRetrievalService: SourceRetrievalService,
   ) {}
+
+  // ===== Draft cache methods =====
+
+  private generateDraftId(): string {
+    return randomUUID();
+  }
+
+  private cacheDraft(draftId: string, entry: CachedEpisodeScriptDraft): void {
+    this.cleanExpiredDrafts();
+    this.enforceDraftCacheLimit();
+    this.draftCache.set(draftId, entry);
+  }
+
+  private getCachedDraft(draftId: string): CachedEpisodeScriptDraft | null {
+    const entry = this.draftCache.get(draftId);
+    if (!entry) return null;
+    if (Date.now() - entry.createdAt > this.DRAFT_CACHE_TTL_MS) {
+      this.draftCache.delete(draftId);
+      return null;
+    }
+    return entry;
+  }
+
+  private deleteCachedDraft(draftId: string): void {
+    this.draftCache.delete(draftId);
+  }
+
+  private cleanExpiredDrafts(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.draftCache) {
+      if (now - entry.createdAt > this.DRAFT_CACHE_TTL_MS) {
+        this.draftCache.delete(key);
+      }
+    }
+  }
+
+  private enforceDraftCacheLimit(): void {
+    if (this.draftCache.size < this.MAX_CACHED_DRAFTS) return;
+    let oldestKey: string | null = null;
+    let oldestTime = Infinity;
+    for (const [key, entry] of this.draftCache) {
+      if (entry.createdAt < oldestTime) {
+        oldestTime = entry.createdAt;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey) this.draftCache.delete(oldestKey);
+  }
 
   async previewPrompt(novelId: number, dto: PipelineEpisodeScriptPreviewDto) {
     await this.assertNovelExists(novelId);
@@ -387,9 +445,25 @@ export class PipelineEpisodeScriptService {
       })}`,
     );
 
+    const draftId = this.generateDraftId();
+    const generationMode = dto.generationMode || 'outline_and_script';
+    this.cacheDraft(draftId, {
+      novelId,
+      generationMode,
+      draft: { episodePackage: draft },
+      createdAt: Date.now(),
+    });
+    const draftSizeKB = Math.round(JSON.stringify(draft).length / 1024);
+    this.logger.log(
+      `[episode-script][generateDraft][cache][stored] ${this.toCompactJson({
+        draftId, novelId, generationMode, draftSizeKB, cacheSize: this.draftCache.size,
+      })}`,
+    );
+
     return {
+      draftId,
       usedModelKey,
-      generationMode: dto.generationMode || 'outline_and_script',
+      generationMode,
       promptPreview: finalPrompt,
       referenceTables,
       referenceSummary,
@@ -406,13 +480,72 @@ export class PipelineEpisodeScriptService {
 
   async persistDraft(novelId: number, dto: PipelineEpisodeScriptPersistDto) {
     const persistStartedAt = Date.now();
+
+    // ===== Resolve draft source: draftId (cache) vs payload =====
+    let resolvedDraft: Record<string, any>;
+    let draftSource: 'cache' | 'payload';
+    let usedDraftId: string | undefined;
+
+    if (dto.draftId) {
+      const cached = this.getCachedDraft(dto.draftId);
+      if (cached) {
+        if (cached.novelId !== novelId) {
+          this.logger.warn(
+            `[episode-script][persist][draftId][mismatch] ${this.toCompactJson({
+              draftId: dto.draftId, cachedNovelId: cached.novelId, requestNovelId: novelId,
+            })}`,
+          );
+          throw new BadRequestException({
+            message: 'draftId 对应的 novelId 与当前请求不匹配',
+            code: 'EPISODE_SCRIPT_DRAFT_ID_NOVEL_MISMATCH',
+          });
+        }
+        resolvedDraft = cached.draft;
+        draftSource = 'cache';
+        usedDraftId = dto.draftId;
+        this.logger.log(
+          `[episode-script][persist][draftId][hit] ${this.toCompactJson({
+            draftId: dto.draftId, novelId,
+          })}`,
+        );
+      } else if (dto.draft) {
+        resolvedDraft = dto.draft;
+        draftSource = 'payload';
+        this.logger.warn(
+          `[episode-script][persist][draftId][miss] ${this.toCompactJson({
+            draftId: dto.draftId, novelId, fallback: 'payload_draft',
+          })}`,
+        );
+      } else {
+        this.logger.warn(
+          `[episode-script][persist][draftId][miss] ${this.toCompactJson({
+            draftId: dto.draftId, novelId, fallback: 'none',
+          })}`,
+        );
+        throw new BadRequestException({
+          message: 'draftId 已过期或不存在，且未提供 draft fallback，请重新生成草稿',
+          code: 'EPISODE_SCRIPT_DRAFT_CACHE_MISS',
+        });
+      }
+    } else if (dto.draft) {
+      resolvedDraft = dto.draft;
+      draftSource = 'payload';
+    } else {
+      throw new BadRequestException({
+        message: '必须提供 draftId 或 draft',
+        code: 'EPISODE_SCRIPT_DRAFT_REQUIRED',
+      });
+    }
+
     const draftPayloadSize = (() => {
-      try { return JSON.stringify(dto.draft).length; } catch { return -1; }
+      try { return JSON.stringify(resolvedDraft).length; } catch { return -1; }
     })();
     this.logger.log(
       `[episode-script][persist][entry] ${this.toCompactJson({
         novelId,
         generationMode: dto.generationMode || 'outline_and_script',
+        draftSource,
+        draftId: usedDraftId || null,
         draftPayloadChars: draftPayloadSize,
         draftPayloadKB: draftPayloadSize > 0 ? Math.round(draftPayloadSize / 1024) : -1,
       })}`,
@@ -424,7 +557,7 @@ export class PipelineEpisodeScriptService {
     const validationWarnings: string[] = [];
     const draft = this.validateAndNormalizeEpisodePackage(
       novelId,
-      dto.draft,
+      resolvedDraft,
       '60s',
       normalizationWarnings,
       validationWarnings,
@@ -444,6 +577,7 @@ export class PipelineEpisodeScriptService {
       `[episode-script][persist][start] ${this.toCompactJson({
         novelId,
         generationMode: dto.generationMode || 'outline_and_script',
+        draftSource,
         actualEpisodeCount: draft.episodes.length,
         episodeRange,
         hookRhythmTableExists: hookTableStatus.exists,
@@ -477,6 +611,15 @@ export class PipelineEpisodeScriptService {
       return this.insertEpisodePackage(novelId, draft, hookTableStatus, manager, warnings);
     });
 
+    if (usedDraftId) {
+      this.deleteCachedDraft(usedDraftId);
+      this.logger.log(
+        `[episode-script][persist][draftId][deleted_after_success] ${this.toCompactJson({
+          draftId: usedDraftId, novelId,
+        })}`,
+      );
+    }
+
     const affectedTables = ['novel_episodes', 'drama_structure_template'];
     const skippedTables = hookTableStatus.exists ? [] : ['novel_hook_rhythm'];
     const persistElapsedMs = Date.now() - persistStartedAt;
@@ -484,6 +627,8 @@ export class PipelineEpisodeScriptService {
       `[episode-script][persist][done] ${this.toCompactJson({
         novelId,
         generationMode: dto.generationMode || 'outline_and_script',
+        draftSource,
+        draftId: usedDraftId || null,
         episodeRange,
         insertedEpisodes: summary.episodes,
         insertedStructureTemplates: summary.structureTemplates,
@@ -830,7 +975,22 @@ export class PipelineEpisodeScriptService {
       error: b.error || undefined,
     }));
 
+    const draftId = this.generateDraftId();
+    this.cacheDraft(draftId, {
+      novelId,
+      generationMode,
+      draft: { episodePackage: draft },
+      createdAt: Date.now(),
+    });
+    const draftSizeKB = Math.round(JSON.stringify(draft).length / 1024);
+    this.logger.log(
+      `[episode-script][generateDraft][cache][stored] ${this.toCompactJson({
+        draftId, novelId, generationMode, draftSizeKB, cacheSize: this.draftCache.size,
+      })}`,
+    );
+
     return {
+      draftId,
       usedModelKey, generationMode, promptPreview: planPrompt,
       referenceTables, referenceSummary,
       draft: { episodePackage: draft },

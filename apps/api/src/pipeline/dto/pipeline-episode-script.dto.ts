@@ -97,8 +97,13 @@ export class PipelineEpisodeScriptPreviewDto {
 export class PipelineEpisodeScriptGenerateDraftDto extends PipelineEpisodeScriptPreviewDto {}
 
 export class PipelineEpisodeScriptPersistDto {
+  @IsOptional()
+  @IsString()
+  draftId?: string;
+
+  @IsOptional()
   @IsObject()
-  draft!: Record<string, any>;
+  draft?: Record<string, any>;
 
   @IsOptional()
   @IsIn(episodeGenerationModes)

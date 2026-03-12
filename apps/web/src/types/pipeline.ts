@@ -573,6 +573,7 @@ export interface PipelineEpisodeScriptLayerUsage {
 }
 
 export interface PipelineEpisodeScriptGenerateDraftResponse {
+  draftId?: string
   usedModelKey: string
   generationMode: string
   promptPreview: string
@@ -596,7 +597,8 @@ export interface PipelineEpisodeScriptGenerateDraftResponse {
 }
 
 export interface PipelineEpisodeScriptPersistPayload {
-  draft: PipelineEpisodeScriptDraft
+  draftId?: string
+  draft?: PipelineEpisodeScriptDraft
   generationMode?: PipelineEpisodeGenerationMode
 }
 

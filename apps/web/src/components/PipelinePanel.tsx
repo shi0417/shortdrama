@@ -387,6 +387,7 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
   const [episodeScriptRepairSummary, setEpisodeScriptRepairSummary] = useState<
     PipelineEpisodeScriptRepairSummary | undefined
   >(undefined)
+  const [episodeScriptDraftId, setEpisodeScriptDraftId] = useState<string | undefined>(undefined)
   const [episodeScriptGeneratingPhase, setEpisodeScriptGeneratingPhase] = useState('')
   const episodeScriptPhaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -1037,6 +1038,7 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
       setEpisodeScriptPromptPreview(result.promptPreview || episodeScriptPromptPreview)
       setEpisodeScriptReferenceSummary(result.referenceSummary || [])
       setEpisodeScriptDraft(result.draft || null)
+      setEpisodeScriptDraftId(result.draftId)
       setEpisodeScriptDraftGenerationMode(result.generationMode)
       setEpisodeScriptTargetEpisodeCount(result.targetEpisodeCount)
       setEpisodeScriptActualEpisodeCount(result.actualEpisodeCount)
@@ -1084,27 +1086,17 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
       )
       if (!confirmed) return
     }
-    try {
-      setEpisodeScriptPersisting(true)
-      const persistPayload = {
-        draft: episodeScriptDraft,
-        generationMode: episodeScriptGenerationMode,
-      }
-      if (process.env.NODE_ENV !== 'production') {
-        const payloadJson = JSON.stringify(persistPayload)
-        const payloadChars = payloadJson.length
-        const payloadBytes = new Blob([payloadJson]).size
-        console.info('[episode-script][persist][frontend][payload]', {
-          novelId,
-          generationMode: episodeScriptGenerationMode,
-          payloadChars,
-          payloadBytes,
-          payloadMB: (payloadBytes / 1024 / 1024).toFixed(2),
-          targetEpisodeCount: episodeScriptTargetEpisodeCount ?? null,
-          actualEpisodeCount: episodeScriptDraft?.episodePackage?.episodes?.length ?? null,
-        })
-      }
-      const result = await pipelineEpisodeScriptApi.persistEpisodeScriptDraft(novelId, persistPayload)
+    const useDraftIdMode = !!episodeScriptDraftId
+    const buildLightPayload = () => ({
+      draftId: episodeScriptDraftId,
+      generationMode: episodeScriptGenerationMode,
+    })
+    const buildFullPayload = () => ({
+      draft: episodeScriptDraft!,
+      generationMode: episodeScriptGenerationMode,
+    })
+
+    const applyResult = async (result: any) => {
       setEpisodeScriptWarnings(result.warnings || [])
       setEpisodeScriptNormalizationWarnings(result.normalizationWarnings || [])
       setEpisodeScriptValidationWarnings(result.validationWarnings || [])
@@ -1112,8 +1104,50 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
       alert(
         `写入成功\nepisodes：${result.summary.episodes}\nstructure templates：${result.summary.structureTemplates}\nhook rhythm：${result.summary.hookRhythm}`
       )
+    }
+
+    try {
+      setEpisodeScriptPersisting(true)
+      const persistPayload = useDraftIdMode ? buildLightPayload() : buildFullPayload()
+
+      if (process.env.NODE_ENV !== 'production') {
+        const payloadJson = JSON.stringify(persistPayload)
+        console.info('[episode-script][persist][frontend][payload]', {
+          novelId,
+          generationMode: episodeScriptGenerationMode,
+          persistMode: useDraftIdMode ? 'draftId' : 'fullDraft',
+          draftId: episodeScriptDraftId ?? null,
+          payloadChars: payloadJson.length,
+          payloadBytes: new Blob([payloadJson]).size,
+          targetEpisodeCount: episodeScriptTargetEpisodeCount ?? null,
+          actualEpisodeCount: episodeScriptDraft?.episodePackage?.episodes?.length ?? null,
+        })
+      }
+
+      const result = await pipelineEpisodeScriptApi.persistEpisodeScriptDraft(novelId, persistPayload)
+      await applyResult(result)
     } catch (err: any) {
-      alert(err?.message || '写入每集纲要/剧本失败')
+      const errorCode = err?.payload?.code
+      const isCacheMiss =
+        errorCode === 'EPISODE_SCRIPT_DRAFT_CACHE_MISS' ||
+        errorCode === 'EPISODE_SCRIPT_DRAFT_EXPIRED'
+
+      if (useDraftIdMode && isCacheMiss && episodeScriptDraft) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.info('[episode-script][persist][frontend][fallback]', {
+            novelId, draftId: episodeScriptDraftId, errorCode,
+          })
+        }
+        try {
+          const fallbackPayload = buildFullPayload()
+          const result = await pipelineEpisodeScriptApi.persistEpisodeScriptDraft(novelId, fallbackPayload)
+          await applyResult(result)
+        } catch (fallbackErr: any) {
+          alert(fallbackErr?.message || '写入每集纲要/剧本失败（fallback 也失败）')
+        }
+      } else {
+        alert(err?.message || '写入每集纲要/剧本失败')
+      }
     } finally {
       setEpisodeScriptPersisting(false)
     }
@@ -2216,6 +2250,7 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
         onClose={() => {
           setEpisodeScriptDialogOpen(false)
           setEpisodeScriptDraft(null)
+          setEpisodeScriptDraftId(undefined)
           setEpisodeScriptDraftGenerationMode(undefined)
           setEpisodeScriptTargetEpisodeCount(undefined)
           setEpisodeScriptActualEpisodeCount(undefined)

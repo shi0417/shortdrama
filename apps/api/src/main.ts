@@ -1,17 +1,19 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
-import * as express from 'express';
 import { AppModule } from './app.module';
 
 const BODY_LIMIT = '20mb';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  const app = await NestFactory.create(AppModule);
   const apiPort = Number(process.env.API_PORT || process.env.PORT || 4000);
   const webOrigin = process.env.WEB_ORIGIN || 'http://localhost:3000';
 
-  app.use(express.json({ limit: BODY_LIMIT }));
-  app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const expressModule = require('express');
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.use(expressModule.json({ limit: BODY_LIMIT }));
+  httpAdapter.use(expressModule.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
   app.enableCors({
     origin: [webOrigin, 'http://localhost:3001'],
