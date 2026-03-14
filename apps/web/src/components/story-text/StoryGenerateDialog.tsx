@@ -70,6 +70,8 @@ export interface StoryGenerateDialogProps {
   onGenerateDraft: () => void
   onCheck: () => void
   onPersistDraft: () => void
+  errorMessage?: string | null
+  successMessage?: string | null
 }
 
 export default function StoryGenerateDialog({
@@ -106,6 +108,8 @@ export default function StoryGenerateDialog({
   onGenerateDraft,
   onCheck,
   onPersistDraft,
+  errorMessage,
+  successMessage,
 }: StoryGenerateDialogProps) {
   if (!open) return null
 
@@ -150,6 +154,34 @@ export default function StoryGenerateDialog({
             gap: 12,
           }}
         >
+          {errorMessage && (
+            <div
+              style={{
+                padding: '10px 12px',
+                background: '#fff2f0',
+                border: '1px solid #ffccc7',
+                borderRadius: 6,
+                color: '#cf1322',
+                fontSize: 13,
+              }}
+            >
+              {errorMessage}
+            </div>
+          )}
+          {successMessage && (
+            <div
+              style={{
+                padding: '10px 12px',
+                background: '#f6ffed',
+                border: '1px solid #b7eb8f',
+                borderRadius: 6,
+                color: '#52c41a',
+                fontSize: 13,
+              }}
+            >
+              {successMessage}
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ fontWeight: 600, fontSize: 16 }}>生成完整故事</div>
             <button
@@ -339,20 +371,31 @@ export default function StoryGenerateDialog({
           {checkReport && (
             <div style={{ border: '1px solid #d9d9d9', borderRadius: 6, padding: 10, fontSize: 12 }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                AI 检查报告（总分：{checkReport.overallScore}，{checkReport.passed ? '通过' : '未通过'}）
+                总分：{checkReport.overallScore} — {checkReport.passed ? '通过' : '未通过'}
               </div>
-              {checkReport.episodeIssues.length > 0 && (
+              {checkReport.episodeIssues.length > 0 ? (
                 <div style={{ marginBottom: 8 }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>逐集问题</div>
-                  {checkReport.episodeIssues.slice(0, 10).map((item, idx) => (
-                    <div key={`${item.episodeNumber}-${idx}`} style={{ marginBottom: 4 }}>
-                      第{item.episodeNumber}集：{item.issues.map((i) => `[${i.severity}] ${i.message}`).join('；')}
+                  {checkReport.episodeIssues.slice(0, 20).map((item, idx) => (
+                    <div key={`${item.episodeNumber}-${idx}`} style={{ marginBottom: 6 }}>
+                      <div style={{ fontWeight: 500, marginBottom: 2 }}>第{item.episodeNumber}集</div>
+                      {item.issues.map((i, j) => (
+                        <div key={`${j}`} style={{ paddingLeft: 8, marginBottom: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ color: i.severity === 'high' ? '#cf1322' : i.severity === 'medium' ? '#d46b08' : '#666' }}>
+                            [{i.severity}]
+                          </span>
+                          <span style={{ color: '#666' }}>{i.type}</span>
+                          <span>{i.message}</span>
+                        </div>
+                      ))}
                     </div>
                   ))}
-                  {checkReport.episodeIssues.length > 10 && (
+                  {checkReport.episodeIssues.length > 20 && (
                     <div style={{ color: '#999' }}>…共 {checkReport.episodeIssues.length} 集有问题</div>
                   )}
                 </div>
+              ) : (
+                <div style={{ color: '#52c41a', marginBottom: 8 }}>未发现明显问题，可进入写入步骤。</div>
               )}
               {checkReport.suggestions.length > 0 && (
                 <div>
@@ -365,6 +408,9 @@ export default function StoryGenerateDialog({
                   ))}
                 </div>
               )}
+              {checkReport.warnings?.length ? (
+                <div style={{ marginTop: 6, color: '#8c8c8c', fontSize: 11 }}>{checkReport.warnings.join(' ')}</div>
+              ) : null}
             </div>
           )}
 

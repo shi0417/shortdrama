@@ -356,7 +356,7 @@ export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: Pro
         ) : activeTab === 'episode-compare' ? (
           <EpisodeComparePanel novelId={novel.id} novelName={novel.novelsName} />
         ) : activeTab === 'story-text' ? (
-          <StoryTextPanel novelId={novel.id} novelName={novel.novelsName} />
+          <StoryTextPanel novelId={novel.id} novelName={novel.novelsName} totalChapters={novel.totalChapters} />
         ) : null}
       </div>
     </div>

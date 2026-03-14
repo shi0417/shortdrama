@@ -34,6 +34,17 @@ function isSafeTextModel(m: AiModelOptionDto): boolean {
   )
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error == null) return fallback
+  const e = error as { message?: string; payload?: { message?: string | string[] }; response?: { data?: { message?: string | string[] } } }
+  const fromPayload = e.payload?.message ?? e.response?.data?.message
+  if (fromPayload != null) {
+    return Array.isArray(fromPayload) ? fromPayload.join('; ') : String(fromPayload)
+  }
+  if (typeof e.message === 'string' && e.message.trim()) return e.message.trim()
+  return fallback
+}
+
 interface StoryTextPanelProps {
   novelId: number
   novelName?: string
@@ -65,6 +76,8 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
   const [storyFinalCompletenessOk, setStoryFinalCompletenessOk] = useState<boolean | undefined>(undefined)
   const [storyCheckReport, setStoryCheckReport] = useState<StoryCheckReportDto | null>(null)
   const [storyVersionList, setStoryVersionList] = useState<Array<{ id: number; episode_number: number; title: string; version_no: number }>>([])
+  const [storyErrorMessage, setStoryErrorMessage] = useState<string | null>(null)
+  const [storySuccessMessage, setStorySuccessMessage] = useState<string | null>(null)
   const phaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadStoryVersions = useCallback(async () => {
@@ -90,6 +103,8 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
   const handleOpenGenerateDialog = useCallback(async () => {
     if (totalChapters != null) setStoryTargetEpisodeCount(totalChapters)
     setStoryGenerateDialogOpen(true)
+    setStoryErrorMessage(null)
+    setStorySuccessMessage(null)
     setStoryDraft(null)
     setStoryDraftId(undefined)
     setStoryWarnings([])
@@ -130,7 +145,8 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
           setStorySelectedModelKey(preview.usedModelKey)
         }
       } catch (err: unknown) {
-        const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : '刷新预览失败'
+        const msg = getErrorMessage(err, '刷新预览失败')
+        setStoryErrorMessage(`Prompt 预览失败：${msg}`)
         setStoryWarnings([msg])
       } finally {
         setStoryLoading(false)
@@ -166,8 +182,10 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
       setStoryPromptPreview(preview.promptPreview || '')
       setStoryReferenceSummary(preview.referenceSummary || [])
       setStoryWarnings(preview.warnings || [])
+      setStoryErrorMessage(null)
     } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : '刷新预览失败'
+      const msg = getErrorMessage(err, '刷新预览失败')
+      setStoryErrorMessage(`Prompt 预览失败：${msg}`)
       setStoryWarnings([msg])
     } finally {
       setStoryLoading(false)
@@ -236,9 +254,10 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
       if (res.promptPreview) {
         setStoryPromptPreview(res.promptPreview)
       }
+      setStoryErrorMessage(null)
     } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : '生成草稿失败'
-      alert(msg)
+      const msg = getErrorMessage(err, '生成草稿失败')
+      setStoryErrorMessage(`生成草稿失败：${msg}`)
     } finally {
       clearPhaseTimer()
       setStoryGeneratingPhase('')
@@ -262,19 +281,25 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
       return
     }
     setStoryPersisting(true)
+    setStoryErrorMessage(null)
     try {
       const payload = storyDraftId
         ? { draftId: storyDraftId, generationMode: 'ai' as const }
         : { draft: storyDraft, generationMode: 'ai' as const }
       await episodeStoryApi.persistDraft(novelId, payload)
-      alert(`写入成功，共 ${storyDraft.episodes.length} 集故事版本已保存。`)
+      const count = storyDraft.episodes.length
+      setStorySuccessMessage(`已成功写入 ${count} 集故事版本，并刷新列表。`)
       setStoryGenerateDialogOpen(false)
       await loadStoryVersions()
       setStoryDraft(null)
       setStoryDraftId(undefined)
     } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : '写入失败'
-      alert(msg)
+      const msg = getErrorMessage(err, '写入失败')
+      setStoryErrorMessage(
+        msg.includes('draftId') || msg.includes('过期') || msg.includes('不存在')
+          ? `写入数据库失败：${msg}（可尝试不依赖 draftId，直接使用当前草稿再次点击写入）`
+          : `写入数据库失败：${msg}`,
+      )
     } finally {
       setStoryPersisting(false)
     }
@@ -287,18 +312,20 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
     }
     setStoryChecking(true)
     try {
+      const modelKey = storySelectedModelKey || storyModels[0]?.modelKey
       const payload = storyDraftId
-        ? { draftId: storyDraftId, referenceTables: storyReferenceTables }
-        : { draft: storyDraft!, referenceTables: storyReferenceTables }
+        ? { draftId: storyDraftId, referenceTables: storyReferenceTables, modelKey }
+        : { draft: storyDraft!, referenceTables: storyReferenceTables, modelKey }
       const report = await episodeStoryApi.check(novelId, payload)
       setStoryCheckReport(report)
+      setStoryErrorMessage(null)
     } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : 'AI 检查失败'
-      alert(msg)
+      const msg = getErrorMessage(err, 'AI 检查失败')
+      setStoryErrorMessage(`AI 检查失败：${msg}`)
     } finally {
       setStoryChecking(false)
     }
-  }, [novelId, storyDraft, storyDraftId, storyReferenceTables])
+  }, [novelId, storyDraft, storyDraftId, storyReferenceTables, storySelectedModelKey, storyModels])
 
   const handleToggleReferenceTable = useCallback((table: EpisodeStoryReferenceTable) => {
     setStoryReferenceTables((prev) =>
@@ -308,6 +335,20 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {storySuccessMessage && (
+        <div
+          style={{
+            padding: '10px 14px',
+            background: '#f6ffed',
+            border: '1px solid #b7eb8f',
+            borderRadius: 6,
+            color: '#52c41a',
+            fontSize: 13,
+          }}
+        >
+          {storySuccessMessage}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <button
           type="button"
@@ -381,6 +422,8 @@ export default function StoryTextPanel({ novelId, novelName, totalChapters }: St
         onGenerateDraft={handleGenerateDraft}
         onCheck={handleCheck}
         onPersistDraft={handlePersistDraft}
+        errorMessage={storyErrorMessage}
+        successMessage={storySuccessMessage}
       />
     </div>
   )

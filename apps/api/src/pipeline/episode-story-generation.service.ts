@@ -14,6 +14,7 @@ import {
   EpisodeStoryReferenceTable,
   StoryCheckReportDto,
 } from './dto/episode-story-generation.dto';
+import type { PipelineReferenceContext } from './pipeline-reference-context.service';
 import { PipelineReferenceContextService } from './pipeline-reference-context.service';
 import { EpisodeStoryVersionService } from './episode-story-version.service';
 
@@ -219,7 +220,8 @@ export class EpisodeStoryGenerationService {
     if (!draft || !draft.episodes.length) {
       throw new BadRequestException('请提供 draftId、draft 或 versionIds');
     }
-    return this.runCheck(novelId, draft, dto.referenceTables ?? []);
+    const refTables = (dto.referenceTables ?? []) as EpisodeStoryReferenceTable[];
+    return this.runCheck(novelId, draft, refTables, dto.modelKey);
   }
 
   private resolveReferenceTables(
@@ -445,8 +447,42 @@ export class EpisodeStoryGenerationService {
   private async runCheck(
     novelId: number,
     draft: EpisodeStoryDraft,
-    referenceTables: string[],
+    referenceTables: EpisodeStoryReferenceTable[],
+    modelKey?: string,
   ): Promise<StoryCheckReportDto> {
+    const ruleReport = this.runRuleBasedCheck(draft);
+    if (referenceTables.length === 0) {
+      return {
+        ...ruleReport,
+        warnings: ['未传入参考表，检查仅基于草稿文本。'],
+      };
+    }
+    try {
+      const refTables = referenceTables as string[];
+      const context = await this.refContext.getContext(novelId, {
+        requestedTables: refTables,
+        startEpisode: 1,
+        endEpisode: draft.episodes.length,
+        optionalTablesCharBudget: 12000,
+        overallCharBudget: 20000,
+      });
+      const checkPrompt = this.buildStoryCheckPrompt(draft, context);
+      const usedModel = (modelKey?.trim() || process.env.LC_STORY_CHECK_MODEL || 'default').slice(0, 100);
+      const llmReport = await this.runStoryCheckLlm(usedModel, checkPrompt);
+      return this.mergeRuleAndLlmReport(ruleReport, llmReport, referenceTables.length > 0);
+    } catch (err) {
+      this.logger.warn('QA v2 LLM check failed, falling back to rule report', err);
+      return {
+        ...ruleReport,
+        warnings: [
+          ...(ruleReport.warnings || []),
+          '参考表驱动 QA 调用失败，已退回仅规则检查结果。',
+        ].filter(Boolean),
+      };
+    }
+  }
+
+  private runRuleBasedCheck(draft: EpisodeStoryDraft): StoryCheckReportDto {
     const episodeIssues: StoryCheckReportDto['episodeIssues'] = [];
     let score = 80;
     for (const ep of draft.episodes) {
@@ -467,7 +503,98 @@ export class EpisodeStoryGenerationService {
       passed,
       episodeIssues,
       suggestions: passed ? [] : [{ suggestion: '建议补充或扩写标为 high/medium 的集数正文后再写入。' }],
-      warnings: referenceTables.length ? undefined : ['未传入参考表，检查仅基于草稿文本。'],
+      warnings: undefined,
+    };
+  }
+
+  private buildStoryCheckPrompt(draft: EpisodeStoryDraft, context: PipelineReferenceContext): string {
+    const draftSummary = draft.episodes
+      .map(
+        (ep) =>
+          `第${ep.episodeNumber}集 title:${ep.title ?? ''} summary:${(ep.summary ?? '').slice(0, 120)} story:${(ep.storyText ?? '').slice(0, 350)}`,
+      )
+      .join('\n');
+    const refBlock = this.refContext.buildNarratorPromptContext(context, { charBudget: 12000 });
+    const episodesPreview = JSON.stringify(context.episodes?.slice(0, 80) ?? [], null, 2);
+    const structurePreview = JSON.stringify(context.structureTemplates?.slice(0, 30) ?? [], null, 2);
+    const hookPreview = JSON.stringify(context.hookRhythms?.slice(0, 80) ?? [], null, 2);
+    return `【待检查故事草稿摘要】\n${draftSummary}\n\n【核心参考】\nnovel_episodes(节选):\n${episodesPreview}\n\ndrama_structure_template(节选):\n${structurePreview}\n\nnovel_hook_rhythm(节选):\n${hookPreview}\n\n【扩展参考】\n${refBlock}\n\n请对上述故事草稿做参考表驱动 QA，输出严格 JSON：\n{\n  "overallScore": number(0-100),\n  "episodeIssues": [{"episodeNumber": number, "issues": [{"type": "outline_mismatch|structure_mismatch|character_inconsistency|continuity_issue|weak_hook|too_short|generic_writing|missing_text", "message": "string", "severity": "low|medium|high"}]}],\n  "suggestions": [{"episodeNumber": number|null, "suggestion": "string"}]\n}\n只输出 JSON，不要 markdown 和解释。`;
+  }
+
+  private async runStoryCheckLlm(
+    modelKey: string,
+    prompt: string,
+  ): Promise<{
+    overallScore?: number;
+    episodeIssues?: StoryCheckReportDto['episodeIssues'];
+    suggestions?: StoryCheckReportDto['suggestions'];
+  }> {
+    const endpoint = this.getLcApiEndpoint();
+    const apiKey = this.getLcApiKey();
+    const body = JSON.stringify({
+      model: modelKey,
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'system',
+          content:
+            '你是短剧故事 QA 助手。根据核心三表与扩展参考表，检查故事草稿的提纲一致性、结构节奏、人物设定、连续性、尾钩与可读性。只输出指定 JSON，不要其他内容。',
+        },
+        { role: 'user', content: prompt },
+      ],
+    });
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body,
+    });
+    const raw = await res.text();
+    if (!res.ok) throw new BadRequestException(`Story check LLM failed: ${res.status}`);
+    const parsed = this.parseJsonFromText(raw) as Record<string, unknown>;
+    const episodeIssues = (Array.isArray(parsed.episodeIssues) ? parsed.episodeIssues : []) as StoryCheckReportDto['episodeIssues'];
+    const suggestions = (Array.isArray(parsed.suggestions) ? parsed.suggestions : []) as StoryCheckReportDto['suggestions'];
+    const overallScore =
+      typeof parsed.overallScore === 'number' ? parsed.overallScore : undefined;
+    return { overallScore, episodeIssues, suggestions };
+  }
+
+  private mergeRuleAndLlmReport(
+    ruleReport: StoryCheckReportDto,
+    llmReport: { overallScore?: number; episodeIssues?: StoryCheckReportDto['episodeIssues']; suggestions?: StoryCheckReportDto['suggestions'] },
+    usedRefTables: boolean,
+  ): StoryCheckReportDto {
+    const byEp = new Map<number, StoryCheckReportDto['episodeIssues'][0]['issues']>();
+    for (const item of ruleReport.episodeIssues) {
+      byEp.set(item.episodeNumber, [...item.issues]);
+    }
+    for (const item of llmReport.episodeIssues ?? []) {
+      const existing = byEp.get(item.episodeNumber) ?? [];
+      for (const issue of item.issues) {
+        if (!existing.some((i) => i.type === issue.type && i.message === issue.message))
+          existing.push(issue);
+      }
+      byEp.set(item.episodeNumber, existing);
+    }
+    const episodeIssues: StoryCheckReportDto['episodeIssues'] = [];
+    for (const [epNum, issues] of byEp) {
+      if (issues.length) episodeIssues.push({ episodeNumber: epNum, issues });
+    }
+    episodeIssues.sort((a, b) => a.episodeNumber - b.episodeNumber);
+    const ruleScore = ruleReport.overallScore;
+    const llmScore = llmReport.overallScore;
+    const overallScore =
+      typeof llmScore === 'number' ? Math.round((ruleScore + llmScore) / 2) : ruleScore;
+    const passed = overallScore >= 60;
+    const suggestions = [
+      ...(ruleReport.suggestions ?? []),
+      ...(llmReport.suggestions ?? []),
+    ].filter(Boolean);
+    return {
+      overallScore: Math.max(0, Math.min(100, overallScore)),
+      passed,
+      episodeIssues,
+      suggestions: suggestions.length ? suggestions : (passed ? [] : [{ suggestion: '建议根据逐集问题修订后再写入。' }]),
+      warnings: usedRefTables ? undefined : ['未传入参考表，检查仅基于草稿文本。'],
     };
   }
 

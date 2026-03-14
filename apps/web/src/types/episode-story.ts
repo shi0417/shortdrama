@@ -98,6 +98,7 @@ export interface EpisodeStoryCheckRequest {
   draft?: EpisodeStoryDraft
   versionIds?: number[]
   referenceTables?: string[]
+  modelKey?: string
 }
 
 export interface StoryCheckReportEpisodeIssue {

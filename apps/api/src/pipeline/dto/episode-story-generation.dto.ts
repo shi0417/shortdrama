@@ -158,6 +158,7 @@ export interface EpisodeStoryPersistResponse {
 export class EpisodeStoryCheckDto {
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   draftId?: string;
 
   @IsOptional()
@@ -171,8 +172,13 @@ export class EpisodeStoryCheckDto {
 
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
-  referenceTables?: string[];
+  @IsIn(allowedEpisodeStoryReferenceTables, { each: true })
+  referenceTables?: EpisodeStoryReferenceTable[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  modelKey?: string;
 }
 
 export interface StoryCheckReportEpisodeIssue {
