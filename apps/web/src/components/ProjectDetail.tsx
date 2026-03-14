@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import SourceTextManager from './SourceTextManager'
 import PipelinePanel from './PipelinePanel'
 import EpisodeComparePanel from './episode-compare/EpisodeComparePanel'
+import StoryTextPanel from './story-text/StoryTextPanel'
 
 interface ProjectDetailProps {
   novel: Novel
@@ -15,7 +16,7 @@ interface ProjectDetailProps {
 }
 
 export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: ProjectDetailProps) {
-  const [activeTab, setActiveTab] = useState<'basic' | 'source' | 'pipeline' | 'episode-compare'>('basic')
+  const [activeTab, setActiveTab] = useState<'basic' | 'source' | 'pipeline' | 'episode-compare' | 'story-text'>('basic')
   const [formData, setFormData] = useState({
     novelsName: novel.novelsName,
     description: novel.description || '',
@@ -120,6 +121,19 @@ export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: Pro
           }}
         >
           Episode Compare
+        </button>
+        <button
+          onClick={() => setActiveTab('story-text')}
+          style={{
+            padding: '12px 24px',
+            border: 'none',
+            background: activeTab === 'story-text' ? 'white' : '#fafafa',
+            borderBottom: activeTab === 'story-text' ? '2px solid #1890ff' : '2px solid transparent',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'story-text' ? 500 : 400,
+          }}
+        >
+          故事文本
         </button>
       </div>
 
@@ -339,9 +353,11 @@ export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: Pro
           <SourceTextManager novelId={novel.id} />
         ) : activeTab === 'pipeline' ? (
           <PipelinePanel novelId={novel.id} novelName={novel.novelsName} totalChapters={novel.totalChapters} />
-        ) : (
+        ) : activeTab === 'episode-compare' ? (
           <EpisodeComparePanel novelId={novel.id} novelName={novel.novelsName} />
-        )}
+        ) : activeTab === 'story-text' ? (
+          <StoryTextPanel novelId={novel.id} novelName={novel.novelsName} />
+        ) : null}
       </div>
     </div>
   )

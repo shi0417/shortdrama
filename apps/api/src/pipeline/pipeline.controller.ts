@@ -22,7 +22,14 @@ import {
   NarratorScriptPersistDto,
   NarratorScriptPreviewDto,
 } from './dto/narrator-script.dto';
+import {
+  EpisodeStoryCheckDto,
+  EpisodeStoryGenerateDraftDto,
+  EpisodeStoryPersistDto,
+  EpisodeStoryPreviewDto,
+} from './dto/episode-story-generation.dto';
 import { NarratorScriptService } from './narrator-script.service';
+import { EpisodeStoryGenerationService } from './episode-story-generation.service';
 import {
   PipelineWorldviewGenerateDraftDto,
   PipelineWorldviewPersistDto,
@@ -42,6 +49,7 @@ export class PipelineController {
     private readonly pipelineWorldviewService: PipelineWorldviewService,
     private readonly pipelineEpisodeScriptService: PipelineEpisodeScriptService,
     private readonly narratorScriptService: NarratorScriptService,
+    private readonly episodeStoryGenerationService: EpisodeStoryGenerationService,
   ) {}
 
   @Get(':novelId/overview')
@@ -151,5 +159,37 @@ export class PipelineController {
     @Body() dto: NarratorScriptPersistDto,
   ) {
     return this.narratorScriptService.persistDraft(novelId, dto);
+  }
+
+  @Post(':novelId/episode-story-preview-prompt')
+  previewEpisodeStoryPrompt(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: EpisodeStoryPreviewDto,
+  ) {
+    return this.episodeStoryGenerationService.previewPrompt(novelId, dto);
+  }
+
+  @Post(':novelId/episode-story-generate-draft')
+  generateEpisodeStoryDraft(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: EpisodeStoryGenerateDraftDto,
+  ) {
+    return this.episodeStoryGenerationService.generateDraft(novelId, dto);
+  }
+
+  @Post(':novelId/episode-story-persist')
+  persistEpisodeStoryDraft(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: EpisodeStoryPersistDto,
+  ) {
+    return this.episodeStoryGenerationService.persistDraft(novelId, dto);
+  }
+
+  @Post(':novelId/episode-story-check')
+  checkEpisodeStory(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: EpisodeStoryCheckDto,
+  ) {
+    return this.episodeStoryGenerationService.check(novelId, dto);
   }
 }
