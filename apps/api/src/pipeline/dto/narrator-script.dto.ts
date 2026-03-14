@@ -7,6 +7,32 @@ export class NarratorScriptGenerateDraftDto {
   @IsInt()
   @Min(1)
   targetEpisodeCount?: number;
+
+  /** 起始集（含），与 endEpisode 一起限定范围；不传则从第 1 集起 */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  startEpisode?: number;
+
+  /** 结束集（含）；不传则用 targetEpisodeCount 或全部 */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  endEpisode?: number;
+
+  /** 每批 LLM 请求的集数，默认 5 */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  batchSize?: number;
+
+  /** 生成模型 key，不传则用配置默认 */
+  @IsOptional()
+  @IsString()
+  modelKey?: string;
 }
 
 export class NarratorScriptPersistDto {
@@ -60,6 +86,11 @@ export interface NarratorScriptVersionDraft {
   scenes: NarratorScriptSceneDraft[];
 }
 
+export interface NarratorScriptDraftMeta {
+  batchCount?: number;
+}
+
 export interface NarratorScriptDraftPayload {
   scripts: NarratorScriptVersionDraft[];
+  meta?: NarratorScriptDraftMeta;
 }

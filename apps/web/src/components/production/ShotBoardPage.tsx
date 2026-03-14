@@ -255,11 +255,20 @@ export default function ShotBoardPage({
                                   : '提示词 (0) ▼'}
                               </button>
                             </p>
-                            {promptsOpenShotId === shot.id && (
+                            {promptsOpenShotId === shot.id && (() => {
+                              const shotPrompts = promptsByShot[shot.id] || []
+                              const hasVideoCn = shotPrompts.some((p) => p.prompt_type === 'video_cn')
+                              const hasVideoEn = shotPrompts.some((p) => p.prompt_type === 'video_en')
+                              const defaultPromptText = shot.visual_desc?.trim() || '画面描述（请根据镜头画面说明填写）'
+                              return (
                               <div style={{ marginTop: 8, padding: 8, background: '#f9f9f9', borderRadius: 4, border: '1px solid #eee' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                                   <strong style={{ fontSize: 13 }}>提示词列表</strong>
                                   <button type="button" onClick={() => { setAddingPromptShotId(shot.id); setNewPromptForm({ promptType: 'video_cn', promptText: '', negativePrompt: '', modelName: '', stylePreset: '' }); }} style={{ padding: '2px 8px', cursor: 'pointer', fontSize: 12 }}>+ 新增</button>
+                                </div>
+                                <div style={{ marginBottom: 8, fontSize: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <span><strong>video_cn</strong>: {hasVideoCn ? '✓ 已有' : <><span style={{ color: '#999' }}>缺</span> <button type="button" onClick={() => { setAddingPromptShotId(shot.id); setNewPromptForm({ promptType: 'video_cn', promptText: defaultPromptText, negativePrompt: '', modelName: '', stylePreset: '' }); }} style={{ padding: '2px 6px', cursor: 'pointer', marginLeft: 4 }}>快速补齐</button></>}</span>
+                                  <span><strong>video_en</strong>: {hasVideoEn ? '✓ 已有' : <><span style={{ color: '#999' }}>缺</span> <button type="button" onClick={() => { setAddingPromptShotId(shot.id); setNewPromptForm({ promptType: 'video_en', promptText: defaultPromptText, negativePrompt: '', modelName: '', stylePreset: '' }); }} style={{ padding: '2px 6px', cursor: 'pointer', marginLeft: 4 }}>快速补齐</button></>}</span>
                                 </div>
                                 {addingPromptShotId === shot.id && (
                                   <div style={{ marginBottom: 8, padding: 8, background: '#fff', border: '1px solid #ddd', borderRadius: 4 }}>
@@ -304,7 +313,8 @@ export default function ShotBoardPage({
                                   )
                                 )}
                               </div>
-                            )}
+                            );
+                            })()}
                           </div>
                           <div style={{ display: 'flex', gap: 4 }}>
                             <button type="button" onClick={() => setEditingShot(shot)} style={{ padding: '4px 8px', cursor: 'pointer' }}>编辑镜头</button>

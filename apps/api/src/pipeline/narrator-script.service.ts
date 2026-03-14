@@ -22,7 +22,8 @@ const MAX_CACHED_DRAFTS = 50;
 const DEFAULT_SCENES_PER_EPISODE = 3;
 const DEFAULT_SHOTS_PER_SCENE = 3;
 const WORLDVIEW_CHAR_BUDGET = 25000;
-const NARRATOR_MODEL = 'claude-3-5-sonnet-20241022';
+const NARRATOR_MODEL_FALLBACK = 'claude-3-5-sonnet-20241022';
+const DEFAULT_BATCH_SIZE = 5;
 
 interface CachedNarratorScriptDraft {
   novelId: number;
@@ -74,20 +75,52 @@ export class NarratorScriptService {
       ...structureMap.keys(),
       ...hookMap.keys(),
     ]);
-    const sortedKeys = [...allKeys].sort((a, b) => a - b);
+    let sortedKeys = [...allKeys].sort((a, b) => a - b);
+    if (dto.startEpisode != null) {
+      sortedKeys = sortedKeys.filter((n) => n >= dto.startEpisode!);
+    }
+    if (dto.endEpisode != null) {
+      sortedKeys = sortedKeys.filter((n) => n <= dto.endEpisode!);
+    }
     const limit = dto.targetEpisodeCount ?? sortedKeys.length;
     const episodeNumbers = sortedKeys.slice(0, limit);
+    const batchSize = Math.max(1, dto.batchSize ?? DEFAULT_BATCH_SIZE);
+    const modelKey = dto.modelKey || this.getNarratorDefaultModel();
 
-    const scripts = await this.generateNarratorScriptsWithLlm(
-      novelId,
-      episodeNumbers,
-      episodeMap,
-      structureMap,
-      hookMap,
-      worldviewBlock,
-    );
+    const batches: number[][] = [];
+    for (let i = 0; i < episodeNumbers.length; i += batchSize) {
+      batches.push(episodeNumbers.slice(i, i + batchSize));
+    }
 
-    const draft: NarratorScriptDraftPayload = { scripts };
+    const allScripts: NarratorScriptVersionDraft[] = [];
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      const rangeStr = `${batch[0]}-${batch[batch.length - 1]}`;
+      this.logger.log(`[narrator-script][batch] ${b + 1}/${batches.length} episodes ${rangeStr}`);
+      try {
+        const batchScripts = await this.generateNarratorScriptsWithLlm(
+          novelId,
+          batch,
+          episodeMap,
+          structureMap,
+          hookMap,
+          worldviewBlock,
+          modelKey,
+        );
+        allScripts.push(...batchScripts);
+      } catch (err: any) {
+        this.logger.error(`[narrator-script][batch] episodes ${rangeStr} failed: ${err?.message}`);
+        throw new BadRequestException(
+          `Narrator script batch failed (episodes ${rangeStr}): ${err?.message}`,
+        );
+      }
+    }
+    allScripts.sort((a, b) => a.episodeNumber - b.episodeNumber);
+
+    const draft: NarratorScriptDraftPayload = {
+      scripts: allScripts,
+      meta: { batchCount: batches.length },
+    };
     const draftId = randomUUID();
     this.cleanExpiredDrafts();
     this.enforceDraftCacheLimit();
@@ -97,7 +130,7 @@ export class NarratorScriptService {
       createdAt: Date.now(),
     });
     this.logger.log(
-      `[narrator-script][generateDraft] novelId=${novelId} draftId=${draftId} scriptCount=${scripts.length}`,
+      `[narrator-script][generateDraft] novelId=${novelId} draftId=${draftId} scriptCount=${allScripts.length}`,
     );
     return { draftId, draft };
   }
@@ -228,11 +261,17 @@ export class NarratorScriptService {
   }
 
   private async hasTable(tableName: string): Promise<boolean> {
-    const [row] = await this.dataSource.query(
+    const raw: any = await this.dataSource.query(
       `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`,
       [tableName],
     );
+    const row = Array.isArray(raw) ? raw[0] : raw;
     return Number((row as RowRecord)?.cnt || 0) > 0;
+  }
+
+  private getNarratorDefaultModel(): string {
+    const env = process.env.NARRATOR_DEFAULT_MODEL?.trim();
+    return env || NARRATOR_MODEL_FALLBACK;
   }
 
   private async generateNarratorScriptsWithLlm(
@@ -242,6 +281,7 @@ export class NarratorScriptService {
     structureMap: Map<number, RowRecord>,
     hookMap: Map<number, RowRecord>,
     worldviewBlock: string,
+    modelKey: string,
   ): Promise<NarratorScriptVersionDraft[]> {
     const episodeLines: string[] = [];
     for (const epNum of episodeNumbers) {
@@ -316,7 +356,7 @@ export class NarratorScriptService {
     const endpoint = this.getLcApiEndpoint();
     const apiKey = this.getLcApiKey();
     const body = JSON.stringify({
-      model: NARRATOR_MODEL,
+      model: modelKey,
       temperature: 0.4,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -578,21 +618,23 @@ export class NarratorScriptService {
     await this.dataSource.transaction(async (manager) => {
       for (const script of resolved.scripts) {
         episodeSet.add(script.episodeNumber);
-        const [episodeRow] = await manager.query(
+        const episodeQuery: any = await manager.query(
           `SELECT id FROM novel_episodes WHERE novel_id = ? AND episode_number = ? LIMIT 1`,
           [novelId, script.episodeNumber],
         );
+        const episodeRow = Array.isArray(episodeQuery) ? episodeQuery[0] : episodeQuery;
         const sourceEpisodeId = episodeRow?.id ?? null;
-        const [versionNoRow] = await manager.query(
+        const versionNoQuery: any = await manager.query(
           `SELECT COALESCE(MAX(version_no), 0) + 1 AS v FROM episode_script_versions WHERE novel_id = ? AND episode_number = ?`,
           [novelId, script.episodeNumber],
         );
+        const versionNoRow = Array.isArray(versionNoQuery) ? versionNoQuery[0] : versionNoQuery;
         const versionNo = Number((versionNoRow as any)?.v ?? 1);
         await manager.query(
           `UPDATE episode_script_versions SET is_active = 0 WHERE novel_id = ? AND episode_number = ?`,
           [novelId, script.episodeNumber],
         );
-        const [versionIns] = await manager.query(
+        const versionIns: any = await manager.query(
           `INSERT INTO episode_script_versions (novel_id, episode_number, source_episode_id, version_no, script_type, title, summary, status, is_active)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 1)`,
           [
@@ -605,11 +647,14 @@ export class NarratorScriptService {
             script.summary || '',
           ],
         );
-        const scriptVersionId = Number((versionIns as any)?.insertId);
+        const scriptVersionId = Number(Array.isArray(versionIns) ? versionIns[0]?.insertId : versionIns?.insertId) || 0;
+        if (!scriptVersionId) {
+          throw new BadRequestException('INSERT episode_script_versions did not return insertId');
+        }
         scriptVersions++;
 
         for (const scene of script.scenes || []) {
-          const [sceneIns] = await manager.query(
+          const sceneIns: any = await manager.query(
             `INSERT INTO episode_scenes (novel_id, script_version_id, episode_number, scene_no, scene_title, location_name, scene_summary, main_conflict, narrator_text, screen_subtitle, estimated_seconds, sort_order)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
@@ -627,11 +672,14 @@ export class NarratorScriptService {
               scene.sceneNo,
             ],
           );
-          const sceneId = Number((sceneIns as any)?.insertId);
+          const sceneId = Number(Array.isArray(sceneIns) ? sceneIns[0]?.insertId : sceneIns?.insertId) || 0;
+          if (!sceneId) {
+            throw new BadRequestException('INSERT episode_scenes did not return insertId');
+          }
           scenes++;
 
           for (const shot of scene.shots || []) {
-            const [shotIns] = await manager.query(
+            const shotIns: any = await manager.query(
               `INSERT INTO episode_shots (novel_id, script_version_id, scene_id, episode_number, shot_no, shot_type, visual_desc, narrator_text, dialogue_text, subtitle_text, duration_sec, camera_movement, emotion_tag, sort_order)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
@@ -651,7 +699,10 @@ export class NarratorScriptService {
                 shot.shotNo,
               ],
             );
-            const shotId = Number((shotIns as any)?.insertId);
+            const shotId = Number(Array.isArray(shotIns) ? shotIns[0]?.insertId : shotIns?.insertId) || 0;
+            if (!shotId) {
+              throw new BadRequestException('INSERT episode_shots did not return insertId');
+            }
             shots++;
 
             for (const prompt of shot.prompts || []) {
@@ -689,6 +740,7 @@ export class NarratorScriptService {
         shots,
         prompts,
         episodeCoverage: episodeSet.size,
+        batchCount: resolved.meta?.batchCount,
       },
     };
   }
@@ -730,9 +782,10 @@ export class NarratorScriptService {
   private async queryHookRhythmIfExists(
     novelId: number,
   ): Promise<Array<Record<string, unknown>>> {
-    const [tableRows] = await this.dataSource.query(
+    const tableQuery: any = await this.dataSource.query(
       `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'novel_hook_rhythm'`,
     );
+    const tableRows = Array.isArray(tableQuery) ? tableQuery[0] : tableQuery;
     const exists = Number((tableRows as any)?.cnt || 0) > 0;
     if (!exists) return [];
     return this.dataSource.query(

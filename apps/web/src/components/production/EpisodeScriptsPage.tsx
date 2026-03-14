@@ -39,7 +39,9 @@ export default function EpisodeScriptsPage({
   const [persisting, setPersisting] = useState(false)
   const [draftId, setDraftId] = useState<string | null>(null)
   const [lastDraft, setLastDraft] = useState<NarratorScriptDraftPayload | null>(null)
-  const [draftPreview, setDraftPreview] = useState<{ scripts: { episodeNumber: number; title: string }[] } | null>(null)
+  const [draftPreview, setDraftPreview] = useState<{ scripts: { episodeNumber: number; title: string }[]; batchCount?: number } | null>(null)
+  const [generateDialogOpen, setGenerateDialogOpen] = useState(false)
+  const [generateParams, setGenerateParams] = useState({ batchSize: 5, modelKey: '', startEpisode: '', endEpisode: '' })
 
   const load = async () => {
     try {
@@ -74,13 +76,30 @@ export default function EpisodeScriptsPage({
     new Set(versions.map((v) => v.episode_number))
   ).sort((a, b) => a - b)
 
+  const handleOpenGenerateDialog = () => {
+    setGenerateParams({ batchSize: 5, modelKey: '', startEpisode: '', endEpisode: '' })
+    setGenerateDialogOpen(true)
+  }
+
   const handleGenerate = async () => {
+    const params: {
+      batchSize?: number
+      modelKey?: string
+      startEpisode?: number
+      endEpisode?: number
+    } = { batchSize: generateParams.batchSize }
+    if (generateParams.modelKey.trim()) params.modelKey = generateParams.modelKey.trim()
+    const start = parseInt(generateParams.startEpisode, 10)
+    const end = parseInt(generateParams.endEpisode, 10)
+    if (!Number.isNaN(start) && start >= 1) params.startEpisode = start
+    if (!Number.isNaN(end) && end >= 1) params.endEpisode = end
+    setGenerateDialogOpen(false)
     try {
       setGenerating(true)
       setDraftId(null)
       setLastDraft(null)
       setDraftPreview(null)
-      const res = await narratorScriptApi.generateDraft(novelId)
+      const res = await narratorScriptApi.generateDraft(novelId, params)
       setDraftId(res.draftId)
       setLastDraft(res.draft ?? null)
       setDraftPreview(
@@ -90,6 +109,7 @@ export default function EpisodeScriptsPage({
                 episodeNumber: s.episodeNumber,
                 title: s.title,
               })),
+              batchCount: res.draft?.meta?.batchCount,
             }
           : null
       )
@@ -125,7 +145,7 @@ export default function EpisodeScriptsPage({
         setDraftPreview(null)
         await load()
         const s = res.summary
-        const msg = `保存成功：${s.scriptVersions} 版本，${s.scenes} 场，${s.shots} 镜，${s.prompts} 条提示词${s.episodeCoverage != null ? `，覆盖 ${s.episodeCoverage} 集` : ''}`
+        const msg = `保存成功：${s.scriptVersions} 版本，${s.scenes} 场，${s.shots} 镜，${s.prompts} 条提示词${s.episodeCoverage != null ? `，覆盖 ${s.episodeCoverage} 集` : ''}${s.batchCount != null ? `，${s.batchCount} 批` : ''}`
         alert(msg)
       }
     } catch (e: unknown) {
@@ -179,10 +199,10 @@ export default function EpisodeScriptsPage({
         <button
           type="button"
           disabled={generating}
-          onClick={() => void handleGenerate()}
+          onClick={handleOpenGenerateDialog}
           style={{ padding: '8px 16px', cursor: generating ? 'not-allowed' : 'pointer', background: '#1890ff', color: '#fff', border: 'none', borderRadius: 6 }}
         >
-          {generating ? '生成中…' : '一键生成旁白主导脚本初稿'}
+          {generating ? '生成中…' : '生成旁白主导脚本初稿'}
         </button>
         {draftId && (
           <button
@@ -196,9 +216,61 @@ export default function EpisodeScriptsPage({
         )}
       </div>
 
+      {generateDialogOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', padding: 24, borderRadius: 8, minWidth: 360 }}>
+            <h3 style={{ margin: '0 0 16px' }}>生成旁白主导脚本初稿</h3>
+            <div style={{ marginBottom: 12 }}>
+              <label>每批集数 (batch size)</label>
+              <input
+                type="number"
+                min={1}
+                value={generateParams.batchSize}
+                onChange={(e) => setGenerateParams((p) => ({ ...p, batchSize: parseInt(e.target.value, 10) || 5 }))}
+                style={{ width: '100%', padding: 6, marginTop: 4 }}
+              />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label>模型 (可选，不填用后端默认)</label>
+              <input
+                value={generateParams.modelKey}
+                onChange={(e) => setGenerateParams((p) => ({ ...p, modelKey: e.target.value }))}
+                placeholder="如 claude-3-5-sonnet-20241022"
+                style={{ width: '100%', padding: 6, marginTop: 4 }}
+              />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label>起始集 (可选)</label>
+              <input
+                type="number"
+                min={1}
+                value={generateParams.startEpisode}
+                onChange={(e) => setGenerateParams((p) => ({ ...p, startEpisode: e.target.value }))}
+                placeholder="留空从第 1 集"
+                style={{ width: '100%', padding: 6, marginTop: 4 }}
+              />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label>结束集 (可选)</label>
+              <input
+                type="number"
+                min={1}
+                value={generateParams.endEpisode}
+                onChange={(e) => setGenerateParams((p) => ({ ...p, endEpisode: e.target.value }))}
+                placeholder="留空到全部"
+                style={{ width: '100%', padding: 6, marginTop: 4 }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setGenerateDialogOpen(false)} style={{ padding: '6px 12px', cursor: 'pointer' }}>取消</button>
+              <button type="button" disabled={generating} onClick={() => void handleGenerate()} style={{ padding: '6px 12px', cursor: 'pointer', background: '#1890ff', color: '#fff', border: 'none', borderRadius: 6 }}>开始生成</button>
+            </div>
+          </div>
+        </div>
+      )}
       {draftPreview?.scripts?.length ? (
         <div style={{ marginBottom: 16, padding: 12, background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 8 }}>
-          <strong>已生成未保存：</strong> 共 {draftPreview.scripts.length} 集草稿。请点击「保存草稿」写入脚本版本 / 场景 / 镜头 / 提示词。
+          <strong>已生成未保存：</strong> 共 {draftPreview.scripts.length} 集草稿{draftPreview.batchCount != null ? `（${draftPreview.batchCount} 批）` : ''}。请点击「保存草稿」写入脚本版本 / 场景 / 镜头 / 提示词。
         </div>
       ) : null}
 

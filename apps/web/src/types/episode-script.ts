@@ -108,8 +108,13 @@ export interface NarratorScriptVersionDraft {
   scenes: NarratorScriptSceneDraft[]
 }
 
+export interface NarratorScriptDraftMeta {
+  batchCount?: number
+}
+
 export interface NarratorScriptDraftPayload {
   scripts: NarratorScriptVersionDraft[]
+  meta?: NarratorScriptDraftMeta
 }
 
 export interface NarratorScriptGenerateDraftResponse {
@@ -130,5 +135,6 @@ export interface NarratorScriptPersistResponse {
     shots: number
     prompts: number
     episodeCoverage?: number
+    batchCount?: number
   }
 }

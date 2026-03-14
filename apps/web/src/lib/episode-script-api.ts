@@ -138,7 +138,16 @@ export const episodeShotPromptApi = {
 
 /** Narrator script generate / persist */
 export const narratorScriptApi = {
-  generateDraft: (novelId: number, params?: { targetEpisodeCount?: number }) =>
+  generateDraft: (
+    novelId: number,
+    params?: {
+      targetEpisodeCount?: number
+      startEpisode?: number
+      endEpisode?: number
+      batchSize?: number
+      modelKey?: string
+    },
+  ) =>
     apiClient(`/pipeline/${novelId}/narrator-script-generate-draft`, {
       method: 'POST',
       body: JSON.stringify(params ?? {}),
