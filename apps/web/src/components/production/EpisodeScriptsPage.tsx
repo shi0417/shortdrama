@@ -12,6 +12,8 @@ import type {
   NarratorScriptDraftPayload,
   NarratorScriptPersistResponse,
 } from '@/types/episode-script'
+import { defaultNarratorReferenceTables } from '@/types/episode-script'
+import NarratorScriptGenerateDialog from './NarratorScriptGenerateDialog'
 
 const pageStyle: React.CSSProperties = {
   padding: 24,
@@ -41,7 +43,19 @@ export default function EpisodeScriptsPage({
   const [lastDraft, setLastDraft] = useState<NarratorScriptDraftPayload | null>(null)
   const [draftPreview, setDraftPreview] = useState<{ scripts: { episodeNumber: number; title: string }[]; batchCount?: number } | null>(null)
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false)
-  const [generateParams, setGenerateParams] = useState({ batchSize: 5, modelKey: '', startEpisode: '1', endEpisode: '5' })
+  const [narratorModelKey, setNarratorModelKey] = useState('')
+  const [narratorBatchSize, setNarratorBatchSize] = useState(5)
+  const [narratorStartEpisode, setNarratorStartEpisode] = useState(1)
+  const [narratorEndEpisode, setNarratorEndEpisode] = useState(5)
+  const [narratorReferenceTables, setNarratorReferenceTables] = useState<string[]>(defaultNarratorReferenceTables)
+  const [narratorSourceTextCharBudget, setNarratorSourceTextCharBudget] = useState(25000)
+  const [narratorUserInstruction, setNarratorUserInstruction] = useState('')
+  const [narratorAllowPromptEdit, setNarratorAllowPromptEdit] = useState(false)
+  const [narratorPromptPreview, setNarratorPromptPreview] = useState('')
+  const [narratorReferenceSummary, setNarratorReferenceSummary] = useState<Array<{ table: string; label: string; rowCount: number; fields: string[]; usedChars?: number }>>([])
+  const [narratorWarnings, setNarratorWarnings] = useState<string[]>([])
+  const [narratorPreviewLoading, setNarratorPreviewLoading] = useState(false)
+  const [narratorValidationWarnings, setNarratorValidationWarnings] = useState<string[]>([])
 
   const load = async () => {
     try {
@@ -77,28 +91,60 @@ export default function EpisodeScriptsPage({
   ).sort((a, b) => a - b)
 
   const handleOpenGenerateDialog = () => {
-    setGenerateParams({ batchSize: 5, modelKey: '', startEpisode: '1', endEpisode: '5' })
+    setNarratorReferenceTables([...defaultNarratorReferenceTables])
+    setNarratorBatchSize(5)
+    setNarratorStartEpisode(1)
+    setNarratorEndEpisode(5)
+    setNarratorSourceTextCharBudget(25000)
+    setNarratorUserInstruction('')
+    setNarratorAllowPromptEdit(false)
+    setNarratorPromptPreview('')
+    setNarratorReferenceSummary([])
+    setNarratorWarnings([])
+    setNarratorValidationWarnings([])
     setGenerateDialogOpen(true)
   }
 
+  const handleRefreshPromptPreview = async () => {
+    try {
+      setNarratorPreviewLoading(true)
+      const res = await narratorScriptApi.previewPrompt(novelId, {
+        modelKey: narratorModelKey || undefined,
+        referenceTables: narratorReferenceTables.length ? narratorReferenceTables : undefined,
+        startEpisode: narratorStartEpisode,
+        endEpisode: narratorEndEpisode,
+        sourceTextCharBudget: narratorSourceTextCharBudget,
+        userInstruction: narratorUserInstruction || undefined,
+        allowPromptEdit: narratorAllowPromptEdit,
+        promptOverride: narratorAllowPromptEdit ? narratorPromptPreview || undefined : undefined,
+      })
+      setNarratorPromptPreview(res.promptPreview)
+      setNarratorReferenceSummary(res.referenceSummary ?? [])
+      setNarratorWarnings(res.warnings ?? [])
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '刷新预览失败')
+    } finally {
+      setNarratorPreviewLoading(false)
+    }
+  }
+
   const handleGenerate = async () => {
-    const params: {
-      batchSize?: number
-      modelKey?: string
-      startEpisode?: number
-      endEpisode?: number
-    } = { batchSize: generateParams.batchSize }
-    if (generateParams.modelKey.trim()) params.modelKey = generateParams.modelKey.trim()
-    const start = parseInt(generateParams.startEpisode, 10)
-    const end = parseInt(generateParams.endEpisode, 10)
-    if (!Number.isNaN(start) && start >= 1) params.startEpisode = start
-    if (!Number.isNaN(end) && end >= 1) params.endEpisode = end
-    setGenerateDialogOpen(false)
     try {
       setGenerating(true)
       setDraftId(null)
       setLastDraft(null)
       setDraftPreview(null)
+      const params = {
+        batchSize: narratorBatchSize,
+        modelKey: narratorModelKey.trim() || undefined,
+        startEpisode: narratorStartEpisode,
+        endEpisode: narratorEndEpisode,
+        referenceTables: narratorReferenceTables.length ? narratorReferenceTables : undefined,
+        sourceTextCharBudget: narratorSourceTextCharBudget,
+        userInstruction: narratorUserInstruction.trim() || undefined,
+        allowPromptEdit: narratorAllowPromptEdit,
+        promptOverride: narratorAllowPromptEdit && narratorPromptPreview.trim() ? narratorPromptPreview.trim() : undefined,
+      }
       const res = await narratorScriptApi.generateDraft(novelId, params)
       setDraftId(res.draftId)
       setLastDraft(res.draft ?? null)
@@ -113,11 +159,18 @@ export default function EpisodeScriptsPage({
             }
           : null
       )
+      setNarratorValidationWarnings(res.validationWarnings ?? [])
     } catch (e: unknown) {
       alert((e as Error)?.message || '生成草稿失败')
     } finally {
       setGenerating(false)
     }
+  }
+
+  const toggleNarratorReferenceTable = (v: string) => {
+    setNarratorReferenceTables((prev) =>
+      prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]
+    )
   }
 
   const handlePersist = async () => {
@@ -216,67 +269,38 @@ export default function EpisodeScriptsPage({
         )}
       </div>
 
-      {generateDialogOpen && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: '#fff', padding: 24, borderRadius: 8, minWidth: 360 }}>
-            <h3 style={{ margin: '0 0 16px' }}>生成旁白主导脚本初稿</h3>
-            <div style={{ marginBottom: 12 }}>
-              <label>每批集数 (batch size)</label>
-              <input
-                type="number"
-                min={1}
-                value={generateParams.batchSize}
-                onChange={(e) => setGenerateParams((p) => ({ ...p, batchSize: parseInt(e.target.value, 10) || 5 }))}
-                style={{ width: '100%', padding: 6, marginTop: 4 }}
-              />
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <label>模型 (可选，不填用后端默认)</label>
-              <input
-                value={generateParams.modelKey}
-                onChange={(e) => setGenerateParams((p) => ({ ...p, modelKey: e.target.value }))}
-                placeholder="如 claude-3-5-sonnet-20241022"
-                style={{ width: '100%', padding: 6, marginTop: 4 }}
-              />
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <label>起始集 (可选)</label>
-              <input
-                type="number"
-                min={1}
-                value={generateParams.startEpisode}
-                onChange={(e) => setGenerateParams((p) => ({ ...p, startEpisode: e.target.value }))}
-                placeholder="留空从第 1 集"
-                style={{ width: '100%', padding: 6, marginTop: 4 }}
-              />
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <label>结束集 (可选)</label>
-              <input
-                type="number"
-                min={1}
-                value={generateParams.endEpisode}
-                onChange={(e) => setGenerateParams((p) => ({ ...p, endEpisode: e.target.value }))}
-                placeholder="留空到全部"
-                style={{ width: '100%', padding: 6, marginTop: 4 }}
-              />
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <button
-                type="button"
-                onClick={() => setGenerateParams((p) => ({ ...p, startEpisode: '1', endEpisode: '5', batchSize: 5 }))}
-                style={{ padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}
-              >
-                只生成前 5 集（稳定验证）
-              </button>
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" onClick={() => setGenerateDialogOpen(false)} style={{ padding: '6px 12px', cursor: 'pointer' }}>取消</button>
-              <button type="button" disabled={generating} onClick={() => void handleGenerate()} style={{ padding: '6px 12px', cursor: 'pointer', background: '#1890ff', color: '#fff', border: 'none', borderRadius: 6 }}>开始生成</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <NarratorScriptGenerateDialog
+        open={generateDialogOpen}
+        modelKey={narratorModelKey}
+        batchSize={narratorBatchSize}
+        startEpisode={narratorStartEpisode}
+        endEpisode={narratorEndEpisode}
+        referenceTables={narratorReferenceTables}
+        sourceTextCharBudget={narratorSourceTextCharBudget}
+        userInstruction={narratorUserInstruction}
+        allowPromptEdit={narratorAllowPromptEdit}
+        promptPreview={narratorPromptPreview}
+        referenceSummary={narratorReferenceSummary}
+        warnings={narratorWarnings}
+        validationWarnings={narratorValidationWarnings}
+        previewLoading={narratorPreviewLoading}
+        generating={generating}
+        persisting={persisting}
+        hasDraft={Boolean(draftId || lastDraft)}
+        onClose={() => setGenerateDialogOpen(false)}
+        onChangeModelKey={setNarratorModelKey}
+        onChangeBatchSize={setNarratorBatchSize}
+        onChangeStartEpisode={setNarratorStartEpisode}
+        onChangeEndEpisode={setNarratorEndEpisode}
+        onToggleReferenceTable={toggleNarratorReferenceTable}
+        onChangeSourceTextCharBudget={setNarratorSourceTextCharBudget}
+        onChangeUserInstruction={setNarratorUserInstruction}
+        onChangeAllowPromptEdit={setNarratorAllowPromptEdit}
+        onChangePromptPreview={setNarratorPromptPreview}
+        onRefreshPromptPreview={() => void handleRefreshPromptPreview()}
+        onGenerateDraft={() => void handleGenerate()}
+        onPersistDraft={() => void handlePersist()}
+      />
       {draftPreview?.scripts?.length ? (
         <div style={{ marginBottom: 16, padding: 12, background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 8 }}>
           <strong>已生成未保存：</strong> 共 {draftPreview.scripts.length} 集草稿{draftPreview.batchCount != null ? `（${draftPreview.batchCount} 批）` : ''}。请点击「保存草稿」写入脚本版本 / 场景 / 镜头 / 提示词。

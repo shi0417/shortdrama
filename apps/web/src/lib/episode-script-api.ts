@@ -4,9 +4,12 @@ import type {
   EpisodeScene,
   EpisodeShot,
   EpisodeShotPrompt,
+  NarratorScriptGenerateDraftParams,
   NarratorScriptGenerateDraftResponse,
   NarratorScriptPersistPayload,
   NarratorScriptPersistResponse,
+  NarratorScriptPreviewRequest,
+  NarratorScriptPreviewResponse,
 } from '@/types/episode-script'
 
 /** Script version summary row (active version per episode with counts) */
@@ -136,18 +139,15 @@ export const episodeShotPromptApi = {
     }) as Promise<{ ok: true }>,
 }
 
-/** Narrator script generate / persist */
+/** Narrator script preview / generate / persist */
 export const narratorScriptApi = {
-  generateDraft: (
-    novelId: number,
-    params?: {
-      targetEpisodeCount?: number
-      startEpisode?: number
-      endEpisode?: number
-      batchSize?: number
-      modelKey?: string
-    },
-  ) =>
+  previewPrompt: (novelId: number, params?: NarratorScriptPreviewRequest) =>
+    apiClient(`/pipeline/${novelId}/narrator-script-preview-prompt`, {
+      method: 'POST',
+      body: JSON.stringify(params ?? {}),
+    }) as Promise<NarratorScriptPreviewResponse>,
+
+  generateDraft: (novelId: number, params?: NarratorScriptGenerateDraftParams) =>
     apiClient(`/pipeline/${novelId}/narrator-script-generate-draft`, {
       method: 'POST',
       body: JSON.stringify(params ?? {}),

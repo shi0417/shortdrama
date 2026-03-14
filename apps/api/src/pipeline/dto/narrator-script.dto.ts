@@ -1,5 +1,86 @@
-import { IsInt, IsOptional, IsObject, IsString, Min } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsObject,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
+
+/** narrator 可选的参考表白名单（与 getContext 支持的扩展表一致） */
+export const allowedNarratorReferenceTables = [
+  'set_core',
+  'set_payoff_arch',
+  'set_payoff_lines',
+  'set_opponents',
+  'set_power_ladder',
+  'set_story_phases',
+  'novel_characters',
+  'novel_key_nodes',
+  'novel_timelines',
+  'novel_source_segments',
+  'drama_source_text',
+  'novel_adaptation_strategy',
+  'drama_novels',
+  'novel_explosions',
+  'novel_skeleton_topics',
+  'novel_skeleton_topic_items',
+  'set_opponent_matrix',
+  'set_traitor_system',
+  'set_traitors',
+  'set_traitor_stages',
+] as const;
+
+export type NarratorReferenceTable = (typeof allowedNarratorReferenceTables)[number];
+
+export class NarratorScriptPreviewDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  modelKey?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  referenceTables?: string[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  startEpisode?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  endEpisode?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  @Max(120000)
+  sourceTextCharBudget?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  userInstruction?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  allowPromptEdit?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200000)
+  promptOverride?: string;
+}
 
 export class NarratorScriptGenerateDraftDto {
   @IsOptional()
@@ -33,6 +114,33 @@ export class NarratorScriptGenerateDraftDto {
   @IsOptional()
   @IsString()
   modelKey?: string;
+
+  /** 参考表列表，不传则用 NARRATOR_DEFAULT_EXTENSION */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  referenceTables?: string[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  @Max(120000)
+  sourceTextCharBudget?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  userInstruction?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  allowPromptEdit?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200000)
+  promptOverride?: string;
 }
 
 export class NarratorScriptPersistDto {

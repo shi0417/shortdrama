@@ -11,6 +11,7 @@ import {
   NarratorScriptDraftPayload,
   NarratorScriptGenerateDraftDto,
   NarratorScriptPersistDto,
+  NarratorScriptPreviewDto,
   NarratorScriptSceneDraft,
   NarratorScriptShotDraft,
   NarratorScriptShotPromptDraft,
@@ -47,11 +48,75 @@ export class NarratorScriptService {
     private readonly refContext: PipelineReferenceContextService,
   ) {}
 
+  async previewPrompt(
+    novelId: number,
+    dto: NarratorScriptPreviewDto,
+  ): Promise<{
+    promptPreview: string;
+    usedModelKey: string;
+    referenceTables: string[];
+    referenceSummary: { table: string; label: string; rowCount: number; fields: string[]; usedChars?: number }[];
+    warnings: string[];
+  }> {
+    await this.assertNovelExists(novelId);
+    const requestedTables = (dto.referenceTables?.length ? dto.referenceTables : NARRATOR_DEFAULT_EXTENSION) as string[];
+    const charBudget = dto.sourceTextCharBudget ?? WORLDVIEW_CHAR_BUDGET;
+    const context = await this.refContext.getContext(novelId, {
+      startEpisode: dto.startEpisode ?? undefined,
+      endEpisode: dto.endEpisode ?? undefined,
+      requestedTables,
+      optionalTablesCharBudget: charBudget,
+    });
+    const episodeMap = new Map<number, RowRecord>();
+    for (const row of context.episodes as RowRecord[]) {
+      const key = Number(row.episode_number);
+      if (!episodeMap.has(key)) episodeMap.set(key, row);
+    }
+    const structureMap = new Map<number, RowRecord>();
+    for (const row of context.structureTemplates as RowRecord[]) {
+      const key = Number(row.chapter_id);
+      if (!structureMap.has(key)) structureMap.set(key, row);
+    }
+    const hookMap = new Map<number, RowRecord>();
+    for (const row of context.hookRhythms as RowRecord[]) {
+      const key = Number(row.episode_number);
+      if (!hookMap.has(key)) hookMap.set(key, row);
+    }
+    const episodeNumbers = context.meta.episodeNumbers;
+    const episodeLines: string[] = [];
+    for (const epNum of episodeNumbers) {
+      const ep = episodeMap.get(epNum) || {};
+      const st = structureMap.get(epNum) || {};
+      const hook = hookMap.get(epNum) || {};
+      episodeLines.push(
+        `第${epNum}集: title=${ep.episode_title || ''} arc=${ep.arc || ''} opening=${this.trimStr(String(ep.opening || ''), 300)} core_conflict=${this.trimStr(String(ep.core_conflict || ''), 400)} outline=${this.trimStr(String(ep.outline_content || ''), 500)} structure=${st.structure_name || ''} cliffhanger=${hook.cliffhanger || ''}`,
+      );
+    }
+    const worldviewBlock = this.refContext.buildNarratorPromptContext(context, { charBudget });
+    const promptPreview = this.buildNarratorUserPrompt(episodeLines, worldviewBlock, dto.userInstruction);
+    const referenceSummary = this.refContext.buildReferenceSummary(context);
+    const warnings: string[] = [];
+    if (context.meta.missingTables?.length) {
+      warnings.push(`缺少表: ${context.meta.missingTables.join(', ')}`);
+    }
+    const usedModelKey = dto.modelKey?.trim() || this.getNarratorDefaultModel();
+    return {
+      promptPreview,
+      usedModelKey,
+      referenceTables: requestedTables,
+      referenceSummary,
+      warnings,
+    };
+  }
+
   async generateDraft(
     novelId: number,
     dto: NarratorScriptGenerateDraftDto,
-  ): Promise<{ draftId: string; draft: NarratorScriptDraftPayload }> {
+  ): Promise<{ draftId: string; draft: NarratorScriptDraftPayload; validationWarnings?: string[] }> {
     await this.assertNovelExists(novelId);
+
+    const requestedTables = (dto.referenceTables?.length ? dto.referenceTables : NARRATOR_DEFAULT_EXTENSION) as string[];
+    const charBudget = dto.sourceTextCharBudget ?? WORLDVIEW_CHAR_BUDGET;
 
     const initialContext = await this.refContext.getContext(novelId, {
       startEpisode: dto.startEpisode ?? undefined,
@@ -70,8 +135,10 @@ export class NarratorScriptService {
     }
 
     this.logger.log(
-      `[narrator-script][generateDraft] novelId=${novelId} episodeRange=1-${episodeNumbers.length} batches=${batches.length} model=${modelKey} requestedTables=${NARRATOR_DEFAULT_EXTENSION.join(',')} existingTables=${initialContext.meta.existingTables.join(',')} missingTables=${initialContext.meta.missingTables.join(',')}`,
+      `[narrator-script][generateDraft] novelId=${novelId} episodeRange=1-${episodeNumbers.length} batches=${batches.length} model=${modelKey} requestedTables=${requestedTables.join(',')} existingTables=${initialContext.meta.existingTables.join(',')} missingTables=${initialContext.meta.missingTables.join(',')}`,
     );
+
+    const useOverride = Boolean(dto.allowPromptEdit && dto.promptOverride?.trim());
 
     const allScripts: NarratorScriptVersionDraft[] = [];
     for (let b = 0; b < batches.length; b++) {
@@ -80,8 +147,8 @@ export class NarratorScriptService {
       this.logger.log(`[narrator-script][batch] ${b + 1}/${batches.length} episodes ${rangeStr}`);
       const batchContext = await this.refContext.getContext(novelId, {
         episodeNumbers: batch,
-        requestedTables: NARRATOR_DEFAULT_EXTENSION,
-        optionalTablesCharBudget: WORLDVIEW_CHAR_BUDGET,
+        requestedTables,
+        optionalTablesCharBudget: charBudget,
       });
       const episodeMap = new Map<number, RowRecord>();
       for (const row of batchContext.episodes as RowRecord[]) {
@@ -98,9 +165,19 @@ export class NarratorScriptService {
         const key = Number(row.episode_number);
         if (!hookMap.has(key)) hookMap.set(key, row);
       }
-      const worldviewBlock = this.refContext.buildNarratorPromptContext(batchContext, {
-        charBudget: WORLDVIEW_CHAR_BUDGET,
-      });
+      const episodeLines: string[] = [];
+      for (const epNum of batch) {
+        const ep = episodeMap.get(epNum) || {};
+        const st = structureMap.get(epNum) || {};
+        const hook = hookMap.get(epNum) || {};
+        episodeLines.push(
+          `第${epNum}集: title=${ep.episode_title || ''} arc=${ep.arc || ''} opening=${this.trimStr(String(ep.opening || ''), 300)} core_conflict=${this.trimStr(String(ep.core_conflict || ''), 400)} outline=${this.trimStr(String(ep.outline_content || ''), 500)} structure=${st.structure_name || ''} cliffhanger=${hook.cliffhanger || ''}`,
+        );
+      }
+      const worldviewBlock = this.refContext.buildNarratorPromptContext(batchContext, { charBudget });
+      const userPrompt = useOverride
+        ? (dto.promptOverride!.trim() as string)
+        : this.buildNarratorUserPrompt(episodeLines, worldviewBlock, dto.userInstruction);
       try {
         const batchScripts = await this.generateNarratorScriptsWithLlm(
           novelId,
@@ -108,7 +185,7 @@ export class NarratorScriptService {
           episodeMap,
           structureMap,
           hookMap,
-          worldviewBlock,
+          userPrompt,
           modelKey,
         );
         allScripts.push(...batchScripts);
@@ -136,7 +213,55 @@ export class NarratorScriptService {
     this.logger.log(
       `[narrator-script][generateDraft] novelId=${novelId} draftId=${draftId} scriptCount=${allScripts.length} batchCount=${batches.length}`,
     );
-    return { draftId, draft };
+    const validationWarnings = this.validateNarratorDraft(draft);
+    return { draftId, draft, validationWarnings };
+  }
+
+  private validateNarratorDraft(draft: NarratorScriptDraftPayload): string[] {
+    const warnings: string[] = [];
+    if (!draft.scripts || !Array.isArray(draft.scripts)) {
+      warnings.push('draft.scripts 不是数组');
+      return warnings;
+    }
+    for (let i = 0; i < draft.scripts.length; i++) {
+      const s = draft.scripts[i];
+      if (!s || typeof s !== 'object') {
+        warnings.push(`第 ${i + 1} 个 script 无效`);
+        continue;
+      }
+      if (s.episodeNumber == null || typeof s.episodeNumber !== 'number') {
+        warnings.push(`第 ${i + 1} 集缺少 episodeNumber`);
+      }
+      if (!s.scenes || !Array.isArray(s.scenes)) {
+        warnings.push(`第 ${s.episodeNumber ?? i + 1} 集缺少 scenes 数组`);
+      } else {
+        for (let j = 0; j < s.scenes.length; j++) {
+          const sc = s.scenes[j];
+          if (!sc || typeof sc !== 'object') {
+            warnings.push(`第 ${s.episodeNumber ?? i + 1} 集第 ${j + 1} 个 scene 无效`);
+            continue;
+          }
+          if (sc.sceneNo == null || !sc.sceneTitle) {
+            warnings.push(`第 ${s.episodeNumber ?? i + 1} 集场景 ${j + 1} 缺少 sceneNo 或 sceneTitle`);
+          }
+          if (!sc.shots || !Array.isArray(sc.shots)) {
+            warnings.push(`第 ${s.episodeNumber ?? i + 1} 集场景 ${j + 1} 缺少 shots 数组`);
+          } else {
+            for (let k = 0; k < sc.shots.length; k++) {
+              const sh = sc.shots[k];
+              if (!sh || typeof sh !== 'object') {
+                warnings.push(`第 ${s.episodeNumber ?? i + 1} 集场景 ${j + 1} 镜头 ${k + 1} 无效`);
+                continue;
+              }
+              if (sh.shotNo == null || !sh.visualDesc) {
+                warnings.push(`第 ${s.episodeNumber ?? i + 1} 集场景 ${j + 1} 镜头 ${k + 1} 缺少 shotNo 或 visualDesc`);
+              }
+            }
+          }
+        }
+      }
+    }
+    return warnings;
   }
 
   private getNarratorDefaultModel(): string {
@@ -144,28 +269,12 @@ export class NarratorScriptService {
     return env || NARRATOR_MODEL_FALLBACK;
   }
 
-  private async generateNarratorScriptsWithLlm(
-    novelId: number,
-    episodeNumbers: number[],
-    episodeMap: Map<number, RowRecord>,
-    structureMap: Map<number, RowRecord>,
-    hookMap: Map<number, RowRecord>,
+  private buildNarratorUserPrompt(
+    episodeLines: string[],
     worldviewBlock: string,
-    modelKey: string,
-  ): Promise<NarratorScriptVersionDraft[]> {
-    const episodeLines: string[] = [];
-    for (const epNum of episodeNumbers) {
-      const ep = episodeMap.get(epNum) || {};
-      const st = structureMap.get(epNum) || {};
-      const hook = hookMap.get(epNum) || {};
-      episodeLines.push(
-        `第${epNum}集: title=${ep.episode_title || ''} arc=${ep.arc || ''} opening=${this.trimStr(String(ep.opening || ''), 300)} core_conflict=${this.trimStr(String(ep.core_conflict || ''), 400)} outline=${this.trimStr(String(ep.outline_content || ''), 500)} structure=${st.structure_name || ''} cliffhanger=${hook.cliffhanger || ''}`,
-      );
-    }
-
-    const systemPrompt = `你是旁白主导短剧脚本生成助手。你必须只输出严格 JSON，不要 markdown 和解释。输出格式必须为：{"scripts":[{"episodeNumber":1,"title":"...","summary":"...","scriptType":"narrator_video","scenes":[...]}]}`;
-
-    const userPrompt = [
+    userInstruction?: string,
+  ): string {
+    const parts = [
       '【任务】',
       '根据以下分集信息与世界观设定，为每一集生成旁白主导的竖屏短剧脚本。请为下面列出的每一集分别生成一个完整的 script 对象，按 episodeNumber 顺序放入 scripts 数组。',
       '主风格：古装架空权谋爽剧。叙述方式：旁白推进剧情，人物对白点睛。',
@@ -221,7 +330,23 @@ export class NarratorScriptService {
           },
         ],
       }, null, 2),
-    ].filter(Boolean).join('\n');
+    ];
+    if (userInstruction?.trim()) {
+      parts.push('', '【用户附加要求】', userInstruction.trim());
+    }
+    return parts.filter(Boolean).join('\n');
+  }
+
+  private async generateNarratorScriptsWithLlm(
+    novelId: number,
+    episodeNumbers: number[],
+    episodeMap: Map<number, RowRecord>,
+    structureMap: Map<number, RowRecord>,
+    hookMap: Map<number, RowRecord>,
+    userPrompt: string,
+    modelKey: string,
+  ): Promise<NarratorScriptVersionDraft[]> {
+    const systemPrompt = `你是旁白主导短剧脚本生成助手。你必须只输出严格 JSON，不要 markdown 和解释。输出格式必须为：{"scripts":[{"episodeNumber":1,"title":"...","summary":"...","scriptType":"narrator_video","scenes":[...]}]}`;
 
     const endpoint = this.getLcApiEndpoint();
     const apiKey = this.getLcApiKey();

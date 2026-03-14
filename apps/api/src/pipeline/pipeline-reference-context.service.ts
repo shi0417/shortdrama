@@ -431,6 +431,27 @@ export class PipelineReferenceContextService {
   }
 
   /**
+   * 从 context 构建参考摘要（供 narrator preview 等返回 referenceSummary）。
+   */
+  buildReferenceSummary(context: PipelineReferenceContext): TableBlockSummary[] {
+    const labelFor = (name: string) =>
+      EXTENDED_TABLE_CONFIG[name]?.label ?? (name === 'drama_source_text' ? '原始素材补充' : name === 'novel_source_segments' ? '原始素材切片证据' : name);
+    const out: TableBlockSummary[] = [];
+    for (const [tableName, rows] of Object.entries(context.optionalTables)) {
+      const arr = Array.isArray(rows) ? rows : [];
+      const row0 = arr[0];
+      const fields = row0 && typeof row0 === 'object' && !Array.isArray(row0) ? Object.keys(row0 as object) : [];
+      out.push({
+        table: tableName,
+        label: labelFor(tableName),
+        rowCount: arr.length,
+        fields,
+      });
+    }
+    return out;
+  }
+
+  /**
    * 构建供 episode-script 使用的参考块（扩展表部分），与 narrator 共享数据格式，字符预算可控。
    */
   buildEpisodeScriptPromptContext(

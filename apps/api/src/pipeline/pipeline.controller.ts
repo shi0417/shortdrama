@@ -20,6 +20,7 @@ import {
 import {
   NarratorScriptGenerateDraftDto,
   NarratorScriptPersistDto,
+  NarratorScriptPreviewDto,
 } from './dto/narrator-script.dto';
 import { NarratorScriptService } from './narrator-script.service';
 import {
@@ -126,6 +127,14 @@ export class PipelineController {
     @Body() dto: PipelineEpisodeScriptPersistDto,
   ) {
     return this.pipelineEpisodeScriptService.persistDraft(novelId, dto);
+  }
+
+  @Post(':novelId/narrator-script-preview-prompt')
+  previewNarratorScriptPrompt(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: NarratorScriptPreviewDto,
+  ) {
+    return this.narratorScriptService.previewPrompt(novelId, dto);
   }
 
   @Post(':novelId/narrator-script-generate-draft')

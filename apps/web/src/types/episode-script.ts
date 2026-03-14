@@ -117,9 +117,67 @@ export interface NarratorScriptDraftPayload {
   meta?: NarratorScriptDraftMeta
 }
 
+/** 与后端 NARRATOR_DEFAULT_EXTENSION 对齐的默认参考表 */
+export const defaultNarratorReferenceTables: string[] = [
+  'set_core',
+  'set_payoff_arch',
+  'set_payoff_lines',
+  'set_opponents',
+  'set_power_ladder',
+  'set_story_phases',
+  'novel_characters',
+  'novel_key_nodes',
+  'novel_timelines',
+]
+
+export interface NarratorScriptReferenceSummaryItem {
+  table: string
+  label: string
+  rowCount: number
+  fields: string[]
+  usedChars?: number
+}
+
+export interface NarratorScriptPreviewRequest {
+  modelKey?: string
+  referenceTables?: string[]
+  startEpisode?: number
+  endEpisode?: number
+  sourceTextCharBudget?: number
+  userInstruction?: string
+  allowPromptEdit?: boolean
+  promptOverride?: string
+}
+
+export interface NarratorScriptPreviewResponse {
+  promptPreview: string
+  usedModelKey: string
+  referenceTables: string[]
+  referenceSummary: NarratorScriptReferenceSummaryItem[]
+  warnings: string[]
+}
+
+export interface NarratorScriptGenerateDraftParams {
+  targetEpisodeCount?: number
+  startEpisode?: number
+  endEpisode?: number
+  batchSize?: number
+  modelKey?: string
+  referenceTables?: string[]
+  sourceTextCharBudget?: number
+  userInstruction?: string
+  allowPromptEdit?: boolean
+  promptOverride?: string
+}
+
 export interface NarratorScriptGenerateDraftResponse {
   draftId: string
   draft: NarratorScriptDraftPayload
+  usedModelKey?: string
+  promptPreview?: string
+  referenceSummary?: NarratorScriptReferenceSummaryItem[]
+  warnings?: string[]
+  validationWarnings?: string[]
 }
 
 export interface NarratorScriptPersistPayload {
