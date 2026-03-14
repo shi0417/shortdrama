@@ -360,9 +360,16 @@ export class EpisodeStoryGenerationService {
     const rawPreview = raw.trim().slice(0, 500);
     this.logger.log(`[episode-story][planner][raw] preview=${rawPreview}`);
     if (!res.ok) throw new BadRequestException(`Planner request failed: ${res.status}`);
-    const parsed = this.parseJsonFromText(raw);
+    const content = this.extractModelContent(raw);
+    const contentPreview = content.trim().slice(0, 500);
+    this.logger.log(`[episode-story][planner][content] preview=${contentPreview}`);
+    const parsed = this.parseJsonFromText(content);
     const planLike = parsed as unknown[] | { episodes?: unknown[]; plan?: unknown[] };
     const arr = Array.isArray(planLike) ? planLike : planLike?.episodes ?? planLike?.plan ?? [];
+    if (arr.length === 0) {
+      this.logger.warn('[episode-story][planner] empty result after parse, throwing');
+      throw new BadRequestException('Episode story planner returned empty result.');
+    }
     const plan: { episodeNumber: number; title?: string; summary?: string; storyBeat?: string }[] = [];
     for (let i = 0; i < (targetCount || 61); i++) {
       const one = arr[i] as PlanItemLike | undefined;
@@ -429,7 +436,12 @@ export class EpisodeStoryGenerationService {
       `[episode-story][writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][raw] preview=${rawPreview}`,
     );
     if (!res.ok) throw new BadRequestException(`Writer batch request failed: ${res.status}`);
-    const parsed = this.parseJsonFromText(raw);
+    const content = this.extractModelContent(raw);
+    const contentPreview = content.trim().slice(0, 500);
+    this.logger.log(
+      `[episode-story][writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][content] preview=${contentPreview}`,
+    );
+    const parsed = this.parseJsonFromText(content);
     const withEpisodes = parsed as unknown[] | { episodes?: unknown[] };
     const arr = Array.isArray(withEpisodes) ? withEpisodes : withEpisodes?.episodes ?? [];
     this.logger.log(
@@ -679,7 +691,8 @@ export class EpisodeStoryGenerationService {
     });
     const raw = await res.text();
     if (!res.ok) throw new BadRequestException(`Story check LLM failed: ${res.status}`);
-    const parsed = this.parseJsonFromText(raw) as Record<string, unknown>;
+    const content = this.extractModelContent(raw);
+    const parsed = this.parseJsonFromText(content) as Record<string, unknown>;
     const episodeIssues = (Array.isArray(parsed.episodeIssues) ? parsed.episodeIssues : []) as StoryCheckReportDto['episodeIssues'];
     const suggestions = (Array.isArray(parsed.suggestions) ? parsed.suggestions : []) as StoryCheckReportDto['suggestions'];
     const overallScore =
@@ -725,6 +738,61 @@ export class EpisodeStoryGenerationService {
       suggestions: suggestions.length ? suggestions : (passed ? [] : [{ suggestion: '建议根据逐集问题修订后再写入。' }]),
       warnings: usedRefTables ? undefined : ['未传入参考表，检查仅基于草稿文本。'],
     };
+  }
+
+  /**
+   * 聚合模型接口常返回 OpenAI-compatible shell，真正的 JSON 在 choices[0].message.content 中。
+   * 先从此方法取出 content 再交给 parseJsonFromText，避免把整个响应当 JSON 解析导致 arrLen=0。
+   */
+  private extractModelContent(raw: string): string {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+    if (parsed == null || typeof parsed !== 'object') return raw;
+    const obj = parsed as Record<string, unknown>;
+
+    const tryContent = (content: unknown): string | null => {
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        const parts = content
+          .map((p) =>
+            p && typeof p === 'object' && 'text' in p
+              ? (p as { text?: string }).text
+              : typeof p === 'string'
+                ? p
+                : '',
+          )
+          .filter(Boolean);
+        return parts.join('');
+      }
+      return null;
+    };
+
+    const choices = obj.choices;
+    if (Array.isArray(choices) && choices.length > 0) {
+      const first = choices[0] as Record<string, unknown>;
+      const message = first?.message;
+      if (message && typeof message === 'object') {
+        const msg = message as Record<string, unknown>;
+        const c = tryContent(msg.content);
+        if (c != null) return c;
+      }
+      const text = first?.text;
+      if (typeof text === 'string') return text;
+    }
+    const message = obj.message;
+    if (message && typeof message === 'object') {
+      const msg = message as Record<string, unknown>;
+      const c = tryContent(msg.content);
+      if (c != null) return c;
+    }
+    const content = obj.content;
+    const c = tryContent(content);
+    if (c != null) return c;
+    return raw;
   }
 
   private parseJsonFromText(raw: string): unknown {
