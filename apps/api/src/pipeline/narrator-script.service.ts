@@ -413,21 +413,59 @@ export class NarratorScriptService {
   }
 
   private parseNarratorJson(text: string): Record<string, unknown> {
-    const trimmed = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const trimmed = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
     try {
       return JSON.parse(trimmed);
     } catch {
       const start = trimmed.indexOf('{');
-      const end = trimmed.lastIndexOf('}');
-      if (start >= 0 && end > start) {
-        try {
-          return JSON.parse(trimmed.slice(start, end + 1));
-        } catch {
-          // fall through
+      if (start >= 0) {
+        const slice = this.extractTopLevelJson(trimmed.slice(start));
+        if (slice) {
+          try {
+            return JSON.parse(slice);
+          } catch {
+            // fall through
+          }
         }
       }
-      throw new BadRequestException('Narrator script LLM output is not valid JSON. Please ensure the model returns only JSON.');
+      const snippet = text.length > 500 ? `${text.slice(0, 250)}...${text.slice(-200)}` : text;
+      this.logger.warn(`[narrator-script][llm] Failed to parse JSON, snippet: ${snippet}`);
+      throw new BadRequestException(
+        'Narrator script LLM output is not valid JSON. Please ensure the model returns only JSON (no markdown, no leading/trailing text).',
+      );
     }
+  }
+
+  /** 从字符串中提取从第一个 { 开始的完整顶层 JSON 对象（按括号匹配） */
+  private extractTopLevelJson(str: string): string | null {
+    if (!str.startsWith('{')) return null;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let quote = '';
+    for (let i = 0; i < str.length; i++) {
+      const c = str[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (inString) {
+        if (c === '\\') escape = true;
+        else if (c === quote) inString = false;
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        inString = true;
+        quote = c;
+        continue;
+      }
+      if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) return str.slice(0, i + 1);
+      }
+    }
+    return null;
   }
 
   private normalizeScripts(
