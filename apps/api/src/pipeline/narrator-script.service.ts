@@ -16,6 +16,10 @@ import {
   NarratorScriptShotPromptDraft,
   NarratorScriptVersionDraft,
 } from './dto/narrator-script.dto';
+import {
+  NARRATOR_DEFAULT_EXTENSION,
+  PipelineReferenceContextService,
+} from './pipeline-reference-context.service';
 
 const DRAFT_CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_CACHED_DRAFTS = 50;
@@ -38,7 +42,10 @@ export class NarratorScriptService {
   private readonly logger = new Logger(NarratorScriptService.name);
   private readonly draftCache = new Map<string, CachedNarratorScriptDraft>();
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly refContext: PipelineReferenceContextService,
+  ) {}
 
   async generateDraft(
     novelId: number,
@@ -46,44 +53,14 @@ export class NarratorScriptService {
   ): Promise<{ draftId: string; draft: NarratorScriptDraftPayload }> {
     await this.assertNovelExists(novelId);
 
-    const [episodes, structureTemplates, hookRhythm, worldviewBlock] =
-      await Promise.all([
-        this.loadEpisodes(novelId),
-        this.loadStructureTemplates(novelId),
-        this.queryHookRhythmIfExists(novelId),
-        this.buildWorldviewContext(novelId),
-      ]);
-
-    const episodeMap = new Map<number, RowRecord>();
-    for (const row of episodes as RowRecord[]) {
-      const key = Number(row.episode_number);
-      if (!episodeMap.has(key)) episodeMap.set(key, row);
-    }
-    const structureMap = new Map<number, RowRecord>();
-    for (const row of structureTemplates as RowRecord[]) {
-      const key = Number(row.chapter_id);
-      if (!structureMap.has(key)) structureMap.set(key, row);
-    }
-    const hookMap = new Map<number, RowRecord>();
-    for (const row of hookRhythm as RowRecord[]) {
-      const key = Number(row.episode_number);
-      if (!hookMap.has(key)) hookMap.set(key, row);
-    }
-
-    const allKeys = new Set<number>([
-      ...episodeMap.keys(),
-      ...structureMap.keys(),
-      ...hookMap.keys(),
-    ]);
-    let sortedKeys = [...allKeys].sort((a, b) => a - b);
-    if (dto.startEpisode != null) {
-      sortedKeys = sortedKeys.filter((n) => n >= dto.startEpisode!);
-    }
-    if (dto.endEpisode != null) {
-      sortedKeys = sortedKeys.filter((n) => n <= dto.endEpisode!);
-    }
-    const limit = dto.targetEpisodeCount ?? sortedKeys.length;
-    const episodeNumbers = sortedKeys.slice(0, limit);
+    const initialContext = await this.refContext.getContext(novelId, {
+      startEpisode: dto.startEpisode ?? undefined,
+      endEpisode: dto.endEpisode ?? undefined,
+      requestedTables: [],
+    });
+    let episodeNumbers = [...initialContext.meta.episodeNumbers];
+    const limit = dto.targetEpisodeCount ?? episodeNumbers.length;
+    episodeNumbers = episodeNumbers.slice(0, limit);
     const batchSize = Math.max(1, dto.batchSize ?? DEFAULT_BATCH_SIZE);
     const modelKey = dto.modelKey || this.getNarratorDefaultModel();
 
@@ -92,11 +69,38 @@ export class NarratorScriptService {
       batches.push(episodeNumbers.slice(i, i + batchSize));
     }
 
+    this.logger.log(
+      `[narrator-script][generateDraft] novelId=${novelId} episodeRange=1-${episodeNumbers.length} batches=${batches.length} model=${modelKey} requestedTables=${NARRATOR_DEFAULT_EXTENSION.join(',')} existingTables=${initialContext.meta.existingTables.join(',')} missingTables=${initialContext.meta.missingTables.join(',')}`,
+    );
+
     const allScripts: NarratorScriptVersionDraft[] = [];
     for (let b = 0; b < batches.length; b++) {
       const batch = batches[b];
       const rangeStr = `${batch[0]}-${batch[batch.length - 1]}`;
       this.logger.log(`[narrator-script][batch] ${b + 1}/${batches.length} episodes ${rangeStr}`);
+      const batchContext = await this.refContext.getContext(novelId, {
+        episodeNumbers: batch,
+        requestedTables: NARRATOR_DEFAULT_EXTENSION,
+        optionalTablesCharBudget: WORLDVIEW_CHAR_BUDGET,
+      });
+      const episodeMap = new Map<number, RowRecord>();
+      for (const row of batchContext.episodes as RowRecord[]) {
+        const key = Number(row.episode_number);
+        if (!episodeMap.has(key)) episodeMap.set(key, row);
+      }
+      const structureMap = new Map<number, RowRecord>();
+      for (const row of batchContext.structureTemplates as RowRecord[]) {
+        const key = Number(row.chapter_id);
+        if (!structureMap.has(key)) structureMap.set(key, row);
+      }
+      const hookMap = new Map<number, RowRecord>();
+      for (const row of batchContext.hookRhythms as RowRecord[]) {
+        const key = Number(row.episode_number);
+        if (!hookMap.has(key)) hookMap.set(key, row);
+      }
+      const worldviewBlock = this.refContext.buildNarratorPromptContext(batchContext, {
+        charBudget: WORLDVIEW_CHAR_BUDGET,
+      });
       try {
         const batchScripts = await this.generateNarratorScriptsWithLlm(
           novelId,
@@ -130,143 +134,9 @@ export class NarratorScriptService {
       createdAt: Date.now(),
     });
     this.logger.log(
-      `[narrator-script][generateDraft] novelId=${novelId} draftId=${draftId} scriptCount=${allScripts.length}`,
+      `[narrator-script][generateDraft] novelId=${novelId} draftId=${draftId} scriptCount=${allScripts.length} batchCount=${batches.length}`,
     );
     return { draftId, draft };
-  }
-
-  private async loadEpisodes(novelId: number): Promise<RowRecord[]> {
-    return this.dataSource.query(
-      `SELECT id, novel_id, episode_number, episode_title, arc, opening, core_conflict, hooks, cliffhanger,
-              full_content, outline_content, history_outline, rewrite_diff, structure_template_id, sort_order
-       FROM novel_episodes WHERE novel_id = ? ORDER BY episode_number ASC, id ASC`,
-      [novelId],
-    );
-  }
-
-  private async loadStructureTemplates(novelId: number): Promise<RowRecord[]> {
-    return this.dataSource.query(
-      `SELECT id, novels_id, chapter_id, power_level, structure_name, identity_gap, pressure_source,
-              first_reverse, continuous_upgrade, suspense_hook, typical_opening, suitable_theme, hot_level, remarks
-       FROM drama_structure_template WHERE novels_id = ? ORDER BY chapter_id ASC, id ASC`,
-      [novelId],
-    );
-  }
-
-  private async buildWorldviewContext(novelId: number): Promise<string> {
-    const sections: string[] = [];
-    let usedChars = 0;
-    const budget = WORLDVIEW_CHAR_BUDGET;
-
-    const tables: Array<{ name: string; label: string; sql: string; fields: string[] }> = [
-      {
-        name: 'set_core',
-        label: '核心设定',
-        sql: `SELECT title, core_text, protagonist_name, protagonist_identity, target_story, rewrite_goal, constraint_text
-              FROM set_core WHERE novel_id = ? AND is_active = 1 ORDER BY version DESC, id DESC LIMIT 1`,
-        fields: ['title', 'core_text', 'protagonist_name', 'protagonist_identity', 'target_story', 'rewrite_goal', 'constraint_text'],
-      },
-      {
-        name: 'set_payoff_arch',
-        label: '爽点架构',
-        sql: `SELECT name, notes FROM set_payoff_arch WHERE novel_id = ? ORDER BY version DESC, id DESC LIMIT 1`,
-        fields: ['name', 'notes'],
-      },
-      {
-        name: 'set_payoff_lines',
-        label: '爽点线',
-        sql: `SELECT line_key, line_name, line_content, start_ep, end_ep, stage_text, sort_order
-              FROM set_payoff_lines WHERE novel_id = ? ORDER BY sort_order ASC, id ASC`,
-        fields: ['line_key', 'line_name', 'line_content', 'start_ep', 'end_ep', 'stage_text', 'sort_order'],
-      },
-      {
-        name: 'set_opponent_matrix',
-        label: '对手矩阵',
-        sql: `SELECT name, description FROM set_opponent_matrix WHERE novel_id = ? ORDER BY version DESC, id DESC LIMIT 1`,
-        fields: ['name', 'description'],
-      },
-      {
-        name: 'set_opponents',
-        label: '对手明细',
-        sql: `SELECT level_name, opponent_name, threat_type, detailed_desc, sort_order
-              FROM set_opponents WHERE novel_id = ? ORDER BY sort_order ASC, id ASC`,
-        fields: ['level_name', 'opponent_name', 'threat_type', 'detailed_desc', 'sort_order'],
-      },
-      {
-        name: 'set_power_ladder',
-        label: '权力阶梯',
-        sql: `SELECT level_no, level_title, identity_desc, ability_boundary, start_ep, end_ep
-              FROM set_power_ladder WHERE novel_id = ? ORDER BY sort_order ASC, id ASC`,
-        fields: ['level_no', 'level_title', 'identity_desc', 'ability_boundary', 'start_ep', 'end_ep'],
-      },
-      {
-        name: 'set_traitor_system',
-        label: '内鬼系统',
-        sql: `SELECT name, description FROM set_traitor_system WHERE novel_id = ? ORDER BY version DESC, id DESC LIMIT 1`,
-        fields: ['name', 'description'],
-      },
-      {
-        name: 'set_traitors',
-        label: '内鬼角色',
-        sql: `SELECT name, public_identity, real_identity, mission, threat_desc, sort_order
-              FROM set_traitors WHERE novel_id = ? ORDER BY sort_order ASC, id ASC`,
-        fields: ['name', 'public_identity', 'real_identity', 'mission', 'threat_desc', 'sort_order'],
-      },
-      {
-        name: 'set_traitor_stages',
-        label: '内鬼阶段',
-        sql: `SELECT stage_title, stage_desc, start_ep, end_ep, sort_order
-              FROM set_traitor_stages WHERE novel_id = ? ORDER BY sort_order ASC, id ASC`,
-        fields: ['stage_title', 'stage_desc', 'start_ep', 'end_ep', 'sort_order'],
-      },
-      {
-        name: 'set_story_phases',
-        label: '故事阶段',
-        sql: `SELECT phase_name, start_ep, end_ep, historical_path, rewrite_path, sort_order
-              FROM set_story_phases WHERE novel_id = ? ORDER BY sort_order ASC, id ASC`,
-        fields: ['phase_name', 'start_ep', 'end_ep', 'historical_path', 'rewrite_path', 'sort_order'],
-      },
-    ];
-
-    for (const t of tables) {
-      if (usedChars >= budget) break;
-      const exists = await this.hasTable(t.name);
-      if (!exists) continue;
-      try {
-        const rows = await this.dataSource.query(t.sql, [novelId]);
-        if (!rows?.length) continue;
-        const simplified = (rows as RowRecord[]).slice(0, 30).map((row) => {
-          const out: RowRecord = {};
-          t.fields.forEach((f) => {
-            const v = row[f];
-            out[f] = typeof v === 'string' && v.length > 600 ? v.slice(0, 600) + '...' : v;
-          });
-          return out;
-        });
-        const block = `【${t.label}（${t.name}）】\n${JSON.stringify(simplified, null, 2)}`;
-        const len = block.length;
-        if (usedChars + len > budget) {
-          sections.push(block.slice(0, budget - usedChars) + '\n...(截断)');
-          usedChars = budget;
-        } else {
-          sections.push(block);
-          usedChars += len;
-        }
-      } catch {
-        // skip table on error
-      }
-    }
-
-    return sections.length ? sections.join('\n\n') : '';
-  }
-
-  private async hasTable(tableName: string): Promise<boolean> {
-    const raw: any = await this.dataSource.query(
-      `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`,
-      [tableName],
-    );
-    const row = Array.isArray(raw) ? raw[0] : raw;
-    return Number((row as RowRecord)?.cnt || 0) > 0;
   }
 
   private getNarratorDefaultModel(): string {
@@ -729,8 +599,9 @@ export class NarratorScriptService {
     if (usedDraftId) {
       this.draftCache.delete(usedDraftId);
     }
+    const episodeList = [...episodeSet].sort((a, b) => a - b);
     this.logger.log(
-      `[narrator-script][persist] novelId=${novelId} scriptVersions=${scriptVersions} scenes=${scenes} shots=${shots} prompts=${prompts} episodeCoverage=${episodeSet.size}`,
+      `[narrator-script][persist] novelId=${novelId} scriptVersions=${scriptVersions} scenes=${scenes} shots=${shots} prompts=${prompts} episodeCoverage=${episodeSet.size} episodes=[${episodeList.join(',')}] batchCount=${resolved.meta?.batchCount ?? 'n/a'}`,
     );
     return {
       ok: true,
@@ -777,22 +648,6 @@ export class NarratorScriptService {
       }
     }
     if (oldestKey) this.draftCache.delete(oldestKey);
-  }
-
-  private async queryHookRhythmIfExists(
-    novelId: number,
-  ): Promise<Array<Record<string, unknown>>> {
-    const tableQuery: any = await this.dataSource.query(
-      `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'novel_hook_rhythm'`,
-    );
-    const tableRows = Array.isArray(tableQuery) ? tableQuery[0] : tableQuery;
-    const exists = Number((tableRows as any)?.cnt || 0) > 0;
-    if (!exists) return [];
-    return this.dataSource.query(
-      `SELECT id, novel_id, episode_number, emotion_level, hook_type, description, cliffhanger
-       FROM novel_hook_rhythm WHERE novel_id = ? ORDER BY episode_number ASC, id ASC`,
-      [novelId],
-    );
   }
 
   private async assertNovelExists(novelId: number): Promise<void> {

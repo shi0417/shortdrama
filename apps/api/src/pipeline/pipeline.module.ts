@@ -15,6 +15,7 @@ import { EpisodeSceneService } from './episode-scene.service';
 import { EpisodeShotService } from './episode-shot.service';
 import { EpisodeShotPromptService } from './episode-shot-prompt.service';
 import { NarratorScriptService } from './narrator-script.service';
+import { PipelineReferenceContextService } from './pipeline-reference-context.service';
 import { SourceTextsModule } from '../source-texts/source-texts.module';
 
 @Module({
@@ -31,6 +32,7 @@ import { SourceTextsModule } from '../source-texts/source-texts.module';
     PipelineReviewService,
     PipelineResourceService,
     PipelineWorldviewService,
+    PipelineReferenceContextService,
     PipelineEpisodeScriptService,
     EpisodeCompareService,
     EpisodeScriptVersionService,

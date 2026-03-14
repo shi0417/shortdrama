@@ -41,7 +41,7 @@ export default function EpisodeScriptsPage({
   const [lastDraft, setLastDraft] = useState<NarratorScriptDraftPayload | null>(null)
   const [draftPreview, setDraftPreview] = useState<{ scripts: { episodeNumber: number; title: string }[]; batchCount?: number } | null>(null)
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false)
-  const [generateParams, setGenerateParams] = useState({ batchSize: 5, modelKey: '', startEpisode: '', endEpisode: '' })
+  const [generateParams, setGenerateParams] = useState({ batchSize: 5, modelKey: '', startEpisode: '1', endEpisode: '5' })
 
   const load = async () => {
     try {
@@ -77,7 +77,7 @@ export default function EpisodeScriptsPage({
   ).sort((a, b) => a - b)
 
   const handleOpenGenerateDialog = () => {
-    setGenerateParams({ batchSize: 5, modelKey: '', startEpisode: '', endEpisode: '' })
+    setGenerateParams({ batchSize: 5, modelKey: '', startEpisode: '1', endEpisode: '5' })
     setGenerateDialogOpen(true)
   }
 
@@ -260,6 +260,15 @@ export default function EpisodeScriptsPage({
                 placeholder="留空到全部"
                 style={{ width: '100%', padding: 6, marginTop: 4 }}
               />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <button
+                type="button"
+                onClick={() => setGenerateParams((p) => ({ ...p, startEpisode: '1', endEpisode: '5', batchSize: 5 }))}
+                style={{ padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}
+              >
+                只生成前 5 集（稳定验证）
+              </button>
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" onClick={() => setGenerateDialogOpen(false)} style={{ padding: '6px 12px', cursor: 'pointer' }}>取消</button>

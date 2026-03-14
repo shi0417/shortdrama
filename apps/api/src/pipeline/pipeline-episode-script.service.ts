@@ -17,6 +17,10 @@ import {
   allowedEpisodeScriptReferenceTables,
 } from './dto/pipeline-episode-script.dto';
 import { SourceRetrievalService } from '../source-texts/source-retrieval.service';
+import {
+  PipelineReferenceContextService,
+  SHARED_SERVICE_TABLE_NAMES,
+} from './pipeline-reference-context.service';
 
 type RowRecord = Record<string, any>;
 
@@ -247,6 +251,7 @@ export class PipelineEpisodeScriptService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly sourceRetrievalService: SourceRetrievalService,
+    private readonly refContext: PipelineReferenceContextService,
   ) {}
 
   // ===== Draft cache methods =====
@@ -1985,6 +1990,22 @@ export class PipelineEpisodeScriptService {
     sourceTextCharBudget: number,
     warnings: string[],
   ): Promise<{ block: string; summary: ReferenceSummaryItem } | null> {
+    if (SHARED_SERVICE_TABLE_NAMES.has(table)) {
+      const shared = await this.refContext.getTableBlock(novelId, table, sourceTextCharBudget);
+      if (shared) {
+        return {
+          block: shared.block,
+          summary: {
+            table: shared.summary.table as PipelineEpisodeScriptReferenceTable,
+            label: shared.summary.label,
+            rowCount: shared.summary.rowCount,
+            fields: shared.summary.fields,
+            usedChars: shared.summary.usedChars,
+          },
+        };
+      }
+      return null;
+    }
     switch (table) {
       case 'drama_novels': {
         const rows = await this.dataSource.query(
