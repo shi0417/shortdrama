@@ -101,18 +101,17 @@ if errorlevel 1 (
     echo [INFO] No staged changes to commit. Will push current branch anyway.
 )
 
+echo [INFO] Checking whether current branch has upstream...
 git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >nul 2>&1
-if errorlevel 1 (
-    echo [STEP] First push for this branch...
-    git push -u origin %BRANCH%
-) else (
-    echo [STEP] Syncing with remote (fetch + rebase)...
+set "HAS_UPSTREAM=!errorlevel!"
+if "!HAS_UPSTREAM!"=="0" (
+    echo [INFO] Upstream detected: YES
+    echo [STEP] Syncing with remote ^(fetch + rebase^)...
     git fetch origin
     if errorlevel 1 (
         echo [ERROR] git fetch failed.
         goto :fail
     )
-
     git pull --rebase --autostash origin %BRANCH%
     if errorlevel 1 (
         echo [ERROR] git pull --rebase failed.
@@ -120,9 +119,12 @@ if errorlevel 1 (
         echo [TIP] Resolve conflicts manually, then rerun this script.
         goto :fail
     )
-
     echo [STEP] Pushing to remote...
     git push
+) else (
+    echo [INFO] Upstream detected: NO
+    echo [STEP] First push for this branch...
+    git push -u origin %BRANCH%
 )
 
 if errorlevel 1 (
@@ -134,6 +136,7 @@ echo.
 echo [OK] Push completed successfully.
 echo [OK] Branch: %BRANCH%
 echo [OK] Remote branch: origin/%BRANCH%
+echo [OK] Your branch is now synced with origin/%BRANCH%
 if "!DID_COMMIT!"=="1" echo [OK] Commit message: !COMMIT_MSG!
 for /f "delims=" %%i in ('git rev-parse --short HEAD 2^>nul') do set "LAST_COMMIT=%%i"
 for /f %%i in ('git status --short ^| find /c /v ""') do set "STATUS_COUNT=%%i"

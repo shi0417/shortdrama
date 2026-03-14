@@ -42,8 +42,8 @@
 6. 在**仓库根目录**执行 `git add -A`，暂存全部改动。
 7. 若有暂存改动则生成带时间戳的 commit message（纯 CMD，使用 WMIC，不依赖 PowerShell）并执行 `git commit`。
 8. **提交后**：若有新建 commit，则输出 `git show --name-only --stat --oneline -1`，展示本次 commit 包含哪些文件。
-9. 若本分支尚未设置上游：执行 `git push -u origin <分支名>`；否则先 `git fetch`，再 `git pull --rebase --autostash`，最后 `git push`。
-10. 输出简要成功信息与自检清单（**若本次未创建新 commit**，不会打印 commit message，清单中 [4] 显示“No new commit (pushed existing commits only)”）；若任一步失败则报错并中止。
+9. **Push 分支**：先检查当前分支是否有 upstream（`git rev-parse @{u}`），结果用变量保存，避免被前面命令的 errorlevel 覆盖；输出 `[INFO] Checking whether current branch has upstream...` 与 `Upstream detected: YES/NO`。若有 upstream：先 `git fetch`，再 `git pull --rebase --autostash`，再 `git push`；若无则 `git push -u origin <分支名>`。
+10. 输出简要成功信息（含 `Your branch is now synced with origin/<branch>`）与自检清单（**若本次未创建新 commit**，不会打印 commit message，清单中 [4] 显示“No new commit (pushed existing commits only)”）；若任一步失败则报错并中止。
 
 ---
 
@@ -121,4 +121,4 @@
 | `git branch --show-current` | 查看当前所在分支名。 |
 | `git remote -v` | 查看远程名称与 URL，确认 `origin` 是否指向预期的 GitHub 仓库。 |
 
-建议在运行 bat **之前**看一次 `git status --short`，**之后**看一次 `git show --name-only --stat --oneline -1` 和 `git status`，避免“以为提交了其实没提交”的情况。
+建议在运行 bat **之前**看一次 `git status --short`，**之后**看一次 `git show --name-only --stat --oneline -1` 和 `git status`，避免“以为提交了其实没提交”的情况。若曾遇到“commit 成功但未自动 push”，可确认日志中是否出现 `[INFO] Checking whether current branch has upstream...` 与 `Upstream detected: YES/NO`、以及随后的 `[STEP] Syncing...` 或 `First push...` 和 `[OK] Push completed successfully`；若没有，参见 `docs/git-manager-push-fix-report.md`。

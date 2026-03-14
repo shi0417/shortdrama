@@ -35,6 +35,10 @@
    - **无新 commit 时不误导**：用 `DID_COMMIT` 标记本次是否新建了 commit；成功时仅在有新 commit 时打印 `[OK] Commit message: ...`，完成清单 [4] 在无新 commit 时显示“No new commit (pushed existing commits only)”。
    - **origin URL 与预期不符时告警**：若 `origin` 已存在但 `git remote get-url origin` 与脚本内 `REMOTE_URL` 不一致，打印 `[WARN] origin URL is not the expected repository` 及当前/预期 URL，避免误推到错误仓库。
 
+7. **commit 后未继续 push 的修复**（见 `docs/git-manager-push-fix-report.md`）
+   - **根因**：commit 成功分支内有多条命令（echo、git show 等），会改写 errorlevel；随后用 `if errorlevel 1` 判断 upstream 时可能读到错误值，导致未稳定进入 fetch/pull/push 分支。
+   - **修复**：执行 `git rev-parse @{u}` 后立即 `set "HAS_UPSTREAM=!errorlevel!"`，再按 `if "!HAS_UPSTREAM!"=="0"` 分支；并增加 `[INFO] Checking whether current branch has upstream...` 与 `Upstream detected: YES/NO` 等输出，便于排查。
+
 ---
 
 ## 3. 为什么之前可能出现“本地有文件但 GitHub 没有”
