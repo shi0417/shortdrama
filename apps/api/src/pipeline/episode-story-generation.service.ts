@@ -22,6 +22,10 @@ const DEFAULT_BATCH_SIZE = 5;
 const DEFAULT_SOURCE_CHAR_BUDGET = 30000;
 const DRAFT_CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_CACHED_DRAFTS = 50;
+/** P0: 禁止占位/极短正文落库；正文最小长度 */
+const MIN_STORY_TEXT_LENGTH = 50;
+/** 占位串模板，仅用于校验与日志，不再作为成功路径 fallback */
+const PLACEHOLDER_STORY_TEXT_TEMPLATE = (epNum: number) => `第${epNum}集故事正文。`;
 
 interface CachedStoryDraft {
   novelId: number;
@@ -39,7 +43,7 @@ interface PlanItemLike {
   storyBeat?: string;
 }
 
-/** LLM 写作批返回项（camel / snake 兼容） */
+/** LLM 写作批返回项（camel / snake 兼容 + content/text/body 兼容） */
 interface WriterItemLike {
   episodeNumber?: number;
   episode_number?: number;
@@ -47,6 +51,9 @@ interface WriterItemLike {
   summary?: string;
   storyText?: string;
   story_text?: string;
+  content?: string;
+  text?: string;
+  body?: string;
 }
 
 @Injectable()
@@ -97,6 +104,9 @@ export class EpisodeStoryGenerationService {
       Math.max(2, dto.batchSize ?? DEFAULT_BATCH_SIZE),
       10,
     );
+    this.logger.log(
+      `[episode-story][generateDraft] novelId=${novelId} targetCount=${targetCount} batchSize=${batchSize} refTablesCount=${referenceTables.length}`,
+    );
     const warnings: string[] = [];
 
     const { promptPreview, referenceSummary } = await this.buildContextBlocks(
@@ -110,6 +120,7 @@ export class EpisodeStoryGenerationService {
 
     const plan = await this.runPlanner(usedModelKey, novelId, targetCount, promptPreview, dto.userInstruction);
     const batches = this.splitBatches(plan, batchSize);
+    this.logger.log(`[episode-story][splitBatches] batchCount=${batches.length}`);
     const batchInfo: EpisodeStoryGenerateDraftResponse['batchInfo'] = [];
     const allEpisodes: EpisodeStoryDraft['episodes'] = [];
     let prevSummary = '';
@@ -124,6 +135,8 @@ export class EpisodeStoryGenerationService {
         prevSummary,
         promptPreview,
         dto.userInstruction,
+        i + 1,
+        batches.length,
       );
       const startEp = batch[0]?.episodeNumber ?? i * batchSize + 1;
       const endEp = batch[batch.length - 1]?.episodeNumber ?? startEp + batch.length - 1;
@@ -143,6 +156,9 @@ export class EpisodeStoryGenerationService {
     const missing = this.findMissingEpisodeNumbers(
       allEpisodes.map((e) => e.episodeNumber),
       targetCount,
+    );
+    this.logger.log(
+      `[episode-story][merge] actualEpisodes=${allEpisodes.length} missing=${missing.length ? missing.join(',') : 'none'}`,
     );
     const finalCompletenessOk = missing.length === 0;
     const countMismatchWarning =
@@ -173,8 +189,20 @@ export class EpisodeStoryGenerationService {
     dto: EpisodeStoryPersistDto,
   ): Promise<EpisodeStoryPersistResponse> {
     const draft = await this.resolveDraftForPersist(novelId, dto);
+    const usingDraftId = !!dto.draftId;
+    this.logger.log(
+      `[episode-story][persist] novelId=${novelId} usingDraftId=${usingDraftId} episodeCount=${draft.episodes.length}`,
+    );
+    this.assertDraftQualityBeforePersist(draft);
     const episodeNumbers: number[] = [];
     for (const ep of draft.episodes) {
+      const storyLen = typeof ep.storyText === 'string' ? ep.storyText.length : 0;
+      const isPlaceholder =
+        typeof ep.storyText === 'string' &&
+        ep.storyText.trim() === PLACEHOLDER_STORY_TEXT_TEMPLATE(ep.episodeNumber);
+      this.logger.log(
+        `[episode-story][persist][episode] ep=${ep.episodeNumber} title=${ep.title ?? '(empty)'} storyLen=${storyLen} isPlaceholder=${isPlaceholder}`,
+      );
       await this.storyVersionService.create(novelId, {
         episodeNumber: ep.episodeNumber,
         storyType: 'story_text',
@@ -188,10 +216,46 @@ export class EpisodeStoryGenerationService {
     if (dto.draftId) {
       this.deleteCachedDraft(dto.draftId);
     }
+    this.logger.log(`[episode-story][persist][summary] inserted=${episodeNumbers.length}`);
     return {
       ok: true,
       summary: { episodeNumbers, versionCount: draft.episodes.length },
     };
+  }
+
+  /** P0: 写库前质量门禁，禁止占位或过短 storyText 落库 */
+  private assertDraftQualityBeforePersist(draft: EpisodeStoryDraft): void {
+    for (const ep of draft.episodes) {
+      const epNum = ep.episodeNumber;
+      if (epNum == null || typeof epNum !== 'number' || Number.isNaN(epNum)) {
+        this.logger.warn('[episode-story][persist] invalid episodeNumber, blocking');
+        throw new BadRequestException(
+          'Episode story draft contains placeholder or too-short storyText. Persist blocked.',
+        );
+      }
+      const storyText = ep.storyText;
+      if (typeof storyText !== 'string') {
+        this.logger.warn('[episode-story][persist] storyText not string, blocking');
+        throw new BadRequestException(
+          'Episode story draft contains placeholder or too-short storyText. Persist blocked.',
+        );
+      }
+      const trimmed = storyText.trim();
+      if (trimmed.length < MIN_STORY_TEXT_LENGTH) {
+        this.logger.warn(
+          `[episode-story][persist] storyText too short ep=${epNum} len=${trimmed.length}, blocking`,
+        );
+        throw new BadRequestException(
+          'Episode story draft contains placeholder or too-short storyText. Persist blocked.',
+        );
+      }
+      if (trimmed === PLACEHOLDER_STORY_TEXT_TEMPLATE(epNum)) {
+        this.logger.warn(`[episode-story][persist] storyText is placeholder ep=${epNum}, blocking`);
+        throw new BadRequestException(
+          'Episode story draft contains placeholder or too-short storyText. Persist blocked.',
+        );
+      }
+    }
   }
 
   async check(novelId: number, dto: EpisodeStoryCheckDto): Promise<StoryCheckReportDto> {
@@ -277,6 +341,8 @@ export class EpisodeStoryGenerationService {
     const systemMsg =
       '你是短剧故事规划助手。根据提供的参考数据，输出每集的轻量规划（episodeNumber、title、summary、storyBeat）。只输出严格 JSON 数组，不要 markdown 和解释。';
     const userMsg = `请为以下短剧生成 ${targetCount} 集的规划（每集含 episodeNumber、title、summary、storyBeat）。\n\n${contextPreview.slice(0, 40000)}`;
+    const promptChars = systemMsg.length + userMsg.length;
+    this.logger.log(`[episode-story][planner] promptChars=${promptChars}`);
     const body = JSON.stringify({
       model: modelKey,
       temperature: 0.3,
@@ -291,6 +357,8 @@ export class EpisodeStoryGenerationService {
       body,
     });
     const raw = await res.text();
+    const rawPreview = raw.trim().slice(0, 500);
+    this.logger.log(`[episode-story][planner][raw] preview=${rawPreview}`);
     if (!res.ok) throw new BadRequestException(`Planner request failed: ${res.status}`);
     const parsed = this.parseJsonFromText(raw);
     const planLike = parsed as unknown[] | { episodes?: unknown[]; plan?: unknown[] };
@@ -305,6 +373,7 @@ export class EpisodeStoryGenerationService {
         storyBeat: one?.storyBeat ?? undefined,
       });
     }
+    this.logger.log(`[episode-story][planner][parse] arrLen=${arr.length} normalizedPlanLen=${plan.length}`);
     return plan;
   }
 
@@ -327,13 +396,20 @@ export class EpisodeStoryGenerationService {
     prevSummary: string,
     contextBlock: string,
     userInstruction?: string,
+    batchIndex?: number,
+    totalBatches?: number,
   ): Promise<EpisodeStoryDraft['episodes']> {
     const endpoint = this.getLcApiEndpoint();
     const apiKey = this.getLcApiKey();
     const batchPlan = JSON.stringify(batch, null, 2);
+    const userMsg = `上一批最后一集摘要：${prevSummary || '（无）'}\n\n本批规划：\n${batchPlan}\n\n参考上下文（节选）：\n${contextBlock.slice(0, 30000)}\n\n${userInstruction ? `用户要求：${userInstruction}` : ''}`;
     const systemMsg =
       '你是短剧故事正文写作助手。根据本批每集的规划（title、summary、storyBeat），生成每集的完整连续故事正文 storyText。只输出严格 JSON 数组，每项含 episodeNumber、title、summary、storyText。';
-    const userMsg = `上一批最后一集摘要：${prevSummary || '（无）'}\n\n本批规划：\n${batchPlan}\n\n参考上下文（节选）：\n${contextBlock.slice(0, 30000)}\n\n${userInstruction ? `用户要求：${userInstruction}` : ''}`;
+    const promptChars = systemMsg.length + userMsg.length;
+    const requestedEpisodes = batch.map((b) => b.episodeNumber).join(',');
+    this.logger.log(
+      `[episode-story][writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}] promptChars=${promptChars} requestedEpisodes=${requestedEpisodes}`,
+    );
     const body = JSON.stringify({
       model: modelKey,
       temperature: 0.5,
@@ -348,22 +424,75 @@ export class EpisodeStoryGenerationService {
       body,
     });
     const raw = await res.text();
+    const rawPreview = raw.trim().slice(0, 500);
+    this.logger.log(
+      `[episode-story][writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][raw] preview=${rawPreview}`,
+    );
     if (!res.ok) throw new BadRequestException(`Writer batch request failed: ${res.status}`);
     const parsed = this.parseJsonFromText(raw);
     const withEpisodes = parsed as unknown[] | { episodes?: unknown[] };
     const arr = Array.isArray(withEpisodes) ? withEpisodes : withEpisodes?.episodes ?? [];
+    this.logger.log(
+      `[episode-story][writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][parse] arrLen=${arr.length}`,
+    );
+    if (arr.length === 0) {
+      this.logger.warn('[episode-story][writer] empty result, throwing');
+      throw new BadRequestException('Episode story writer returned empty result.');
+    }
+    if (arr.length < batch.length) {
+      this.logger.warn(
+        `[episode-story][writer] fewer items than batch: arrLen=${arr.length} batchLen=${batch.length}`,
+      );
+      throw new BadRequestException(
+        'Episode story writer returned fewer items than requested batch.',
+      );
+    }
+    let invalidStoryTextCount = 0;
     const out: EpisodeStoryDraft['episodes'] = [];
     for (let i = 0; i < batch.length; i++) {
       const one = (arr[i] || {}) as WriterItemLike;
       const epNum = (one.episodeNumber ?? one.episode_number ?? batch[i]?.episodeNumber ?? i + 1) as number;
-      out.push({
-        episodeNumber: epNum,
-        title: one.title ?? batch[i]?.title,
-        summary: one.summary ?? batch[i]?.summary,
-        storyText: typeof one.storyText === 'string' ? one.storyText : (one.story_text ?? `第${epNum}集故事正文。`) as string,
-      });
+      const normalizedStoryText = this.normalizeWriterStoryText(one);
+      const placeholderStr = PLACEHOLDER_STORY_TEXT_TEMPLATE(epNum);
+      const isValid =
+        typeof normalizedStoryText === 'string' &&
+        normalizedStoryText.trim().length >= MIN_STORY_TEXT_LENGTH &&
+        normalizedStoryText.trim() !== placeholderStr;
+      if (!isValid) {
+        invalidStoryTextCount += 1;
+      } else {
+        out.push({
+          episodeNumber: epNum,
+          title: one.title ?? batch[i]?.title,
+          summary: one.summary ?? batch[i]?.summary,
+          storyText: normalizedStoryText,
+        });
+      }
+    }
+    this.logger.log(
+      `[episode-story][writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][validate] requested=${batch.length} parsed=${arr.length} invalidStoryTextCount=${invalidStoryTextCount}`,
+    );
+    if (invalidStoryTextCount > 0) {
+      this.logger.warn(
+        `[episode-story][writer] invalid storyText count=${invalidStoryTextCount}, throwing`,
+      );
+      throw new BadRequestException(
+        'Episode story writer returned invalid storyText for some episodes.',
+      );
     }
     return out;
+  }
+
+  /** 从 LLM 返回项中取正文，兼容 storyText / story_text / content / text / body */
+  private normalizeWriterStoryText(one: WriterItemLike): string | null {
+    const candidates = [
+      one.storyText,
+      one.story_text,
+      one.content,
+      one.text,
+      one.body,
+    ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    return candidates[0]?.trim() ?? null;
   }
 
   private findMissingEpisodeNumbers(
