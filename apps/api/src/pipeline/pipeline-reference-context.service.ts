@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { SourceRetrievalService } from '../source-texts/source-retrieval.service';
 
 /** 核心三表（必选） */
 export const CORE_REFERENCE_TABLES = [
@@ -60,9 +61,6 @@ export const EPISODE_SCRIPT_DEFAULT_EXTENSION: string[] = [
 export type CoreTableName = (typeof CORE_REFERENCE_TABLES)[number];
 export type ExtendedTableName = (typeof EXTENDED_REFERENCE_TABLES)[number];
 
-/** 共享服务可提供单表 block 的表名集合，供 episode-script 等调用方判断是否走 getTableBlock */
-export const SHARED_SERVICE_TABLE_NAMES = new Set<string>(Object.keys(EXTENDED_TABLE_CONFIG));
-
 export interface PipelineReferenceContext {
   novel: Record<string, unknown> | null;
   episodes: Record<string, unknown>[];
@@ -100,11 +98,17 @@ const DEFAULT_OPTIONAL_CHAR_BUDGET = 25000;
 const DEFAULT_PER_TABLE_MAX_CHARS = 4000;
 const WORLDVIEW_TRIM_FIELD = 600;
 
-/** 扩展表配置：label, sql, fields；sql 中 ? 仅 novelId（除 adaptation_modes 等无 novelId 的表） */
+/** 扩展表配置：label, sql, fields；params 缺省为 [novelId]，无 novelId 的表传 params: [] */
 const EXTENDED_TABLE_CONFIG: Record<
   string,
-  { label: string; sql: string; fields: string[] }
+  { label: string; sql: string; fields: string[]; params?: unknown[] }
 > = {
+  adaptation_modes: {
+    label: '改编模式',
+    sql: `SELECT mode_key, mode_name, description FROM adaptation_modes ORDER BY id ASC`,
+    fields: ['mode_key', 'mode_name', 'description'],
+    params: [],
+  },
   drama_novels: {
     label: '项目主信息',
     sql: `SELECT id, novels_name, total_chapters, power_up_interval, author, description, status
@@ -209,11 +213,21 @@ const EXTENDED_TABLE_CONFIG: Record<
   },
 };
 
+/** 共享服务可提供单表 block 的表名集合（含 drama_source_text / novel_source_segments 等需特殊取数的表） */
+export const SHARED_SERVICE_TABLE_NAMES = new Set<string>([
+  ...Object.keys(EXTENDED_TABLE_CONFIG),
+  'drama_source_text',
+  'novel_source_segments',
+]);
+
 @Injectable()
 export class PipelineReferenceContextService {
   private readonly logger = new Logger(PipelineReferenceContextService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly sourceRetrievalService: SourceRetrievalService,
+  ) {}
 
   async hasTable(tableName: string): Promise<boolean> {
     const raw: any = await this.dataSource.query(
@@ -317,17 +331,50 @@ export class PipelineReferenceContextService {
     const optionalBudget = Math.min(optionalTablesCharBudget, overallCharBudget);
 
     for (const tableName of requestedTables) {
-      if (!existingTables.includes(tableName) || !EXTENDED_TABLE_CONFIG[tableName]) continue;
       if (usedOptionalChars >= optionalBudget) break;
+      if (tableName === 'drama_source_text') {
+        if (!existingTables.includes(tableName)) continue;
+        try {
+          const r = await this.getDramaSourceTextBlock(novelId, optionalBudget - usedOptionalChars);
+          optionalTables[tableName] = [{ block: r.block, rowCount: r.rowCount, usedChars: r.usedChars }];
+          usedOptionalChars += r.usedChars;
+        } catch {
+          missingTables.push(tableName);
+        }
+        continue;
+      }
+      if (tableName === 'novel_source_segments') {
+        if (!existingTables.includes(tableName) || !this.sourceRetrievalService) continue;
+        try {
+          const evidence = await this.sourceRetrievalService.buildWorldviewEvidence(
+            novelId,
+            optionalBudget - usedOptionalChars,
+          );
+          optionalTables[tableName] = [
+            {
+              block: evidence.block,
+              segmentCount: evidence.segmentCount,
+              evidenceChars: evidence.evidenceChars,
+              usedFallback: evidence.usedFallback,
+            },
+          ];
+          usedOptionalChars += evidence.evidenceChars;
+        } catch {
+          missingTables.push(tableName);
+        }
+        continue;
+      }
+      if (!existingTables.includes(tableName) || !EXTENDED_TABLE_CONFIG[tableName]) continue;
       const cfg = EXTENDED_TABLE_CONFIG[tableName];
+      const params = cfg.params ?? [novelId];
       try {
-        const rows = await this.dataSource.query(cfg.sql, [novelId]) as Record<string, unknown>[];
+        const rows = await this.dataSource.query(cfg.sql, params) as Record<string, unknown>[];
         const maxPerRow = Math.min(WORLDVIEW_TRIM_FIELD, Math.floor((optionalBudget - usedOptionalChars) / Math.max(1, (rows?.length || 0))));
         const simplified = (rows || []).slice(0, 30).map((row) => {
           const out: Record<string, unknown> = {};
           cfg.fields.forEach((f) => {
             const v = row[f];
-            out[f] = typeof v === 'string' && v.length > maxPerRow ? (v as string).slice(0, maxPerRow) + '...' : v;
+            out[f] = typeof v === 'string' && (v as string).length > maxPerRow ? (v as string).slice(0, maxPerRow) + '...' : v;
           });
           return out;
         });
@@ -365,10 +412,11 @@ export class PipelineReferenceContextService {
     const budget = options.charBudget ?? DEFAULT_OPTIONAL_CHAR_BUDGET;
     const sections: string[] = [];
     let used = 0;
+    const labelFor = (name: string) =>
+      EXTENDED_TABLE_CONFIG[name]?.label ?? (name === 'drama_source_text' ? '原始素材补充' : name === 'novel_source_segments' ? '原始素材切片证据' : name);
     for (const [tableName, rows] of Object.entries(context.optionalTables)) {
       if (used >= budget) break;
-      const cfg = EXTENDED_TABLE_CONFIG[tableName];
-      const label = cfg?.label ?? tableName;
+      const label = labelFor(tableName);
       const block = `【${label}（${tableName}）】\n${JSON.stringify(rows, null, 2)}`;
       const len = block.length;
       if (used + len > budget) {
@@ -393,10 +441,11 @@ export class PipelineReferenceContextService {
     const requested = new Set(options.requestedTables ?? Object.keys(context.optionalTables));
     const sections: string[] = [];
     let used = 0;
+    const labelFor = (name: string) =>
+      EXTENDED_TABLE_CONFIG[name]?.label ?? (name === 'drama_source_text' ? '原始素材补充' : name === 'novel_source_segments' ? '原始素材切片证据' : name);
     for (const [tableName, rows] of Object.entries(context.optionalTables)) {
       if (!requested.has(tableName) || used >= budget) continue;
-      const cfg = EXTENDED_TABLE_CONFIG[tableName];
-      const label = cfg?.label ?? tableName;
+      const label = labelFor(tableName);
       const block = `【${label}（${tableName}）】\n${JSON.stringify(rows, null, 2)}`;
       const len = block.length;
       if (used + len > budget) {
@@ -411,8 +460,37 @@ export class PipelineReferenceContextService {
   }
 
   /**
-   * 单表取块，供 episode-script 的 buildReferenceBlock 复用，避免重复查表逻辑。
-   * 仅支持 EXTENDED_TABLE_CONFIG 中配置的表；drama_source_text / novel_source_segments / adaptation_modes 等由 episode-script 自行处理。
+   * drama_source_text 按字符预算取块（与 episode-script getRawSourceTextBlock 逻辑统一）。
+   */
+  private async getDramaSourceTextBlock(
+    novelId: number,
+    charBudget: number,
+  ): Promise<{ block: string; rowCount: number; usedChars: number }> {
+    const rows = await this.dataSource.query(
+      `SELECT id, source_text AS sourceText FROM drama_source_text WHERE novels_id = ? ORDER BY id ASC`,
+      [novelId],
+    ) as Array<{ id: number; sourceText: string | null }>;
+    if (!rows?.length) {
+      return { block: '', rowCount: 0, usedChars: 0 };
+    }
+    const limit = Math.max(1500, charBudget);
+    const used: string[] = [];
+    let usedChars = 0;
+    for (const row of rows) {
+      const text = (row.sourceText || '').trim();
+      if (!text) continue;
+      const remain = limit - usedChars;
+      if (remain <= 0) break;
+      const clipped = text.length > remain ? text.slice(0, remain) + '...(截断)' : text;
+      used.push(`[source_text#${row.id}] ${clipped}`);
+      usedChars += clipped.length;
+    }
+    return { block: used.join('\n\n'), rowCount: rows.length, usedChars };
+  }
+
+  /**
+   * 单表取块，供 episode-script 的 buildReferenceBlock 复用。
+   * 支持 EXTENDED_TABLE_CONFIG、drama_source_text、novel_source_segments、adaptation_modes。
    */
   async getTableBlock(
     novelId: number,
@@ -421,10 +499,51 @@ export class PipelineReferenceContextService {
   ): Promise<{ block: string; summary: TableBlockSummary } | null> {
     const exists = await this.hasTable(tableName);
     if (!exists) return null;
+
+    if (tableName === 'drama_source_text') {
+      try {
+        const r = await this.getDramaSourceTextBlock(novelId, charBudget);
+        const block = `【原始素材补充（drama_source_text）】\n${r.block || '（无）'}`;
+        return {
+          block: block.length > charBudget ? block.slice(0, charBudget) + '\n...(截断)' : block,
+          summary: {
+            table: tableName,
+            label: '原始素材补充',
+            rowCount: r.rowCount,
+            fields: ['source_text'],
+            usedChars: Math.min(r.usedChars, charBudget),
+          },
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    if (tableName === 'novel_source_segments') {
+      if (!this.sourceRetrievalService) return null;
+      try {
+        const evidence = await this.sourceRetrievalService.buildWorldviewEvidence(novelId, charBudget);
+        const block = `【原始素材切片证据（novel_source_segments）】\n${evidence.block || '（无）'}`;
+        return {
+          block,
+          summary: {
+            table: tableName,
+            label: '原始素材切片证据',
+            rowCount: evidence.segmentCount,
+            fields: ['segment_index', 'chapter_label', 'title_hint', 'content_text', 'keyword_text'],
+            usedChars: evidence.evidenceChars,
+          },
+        };
+      } catch {
+        return null;
+      }
+    }
+
     const cfg = EXTENDED_TABLE_CONFIG[tableName];
     if (!cfg) return null;
+    const params = cfg.params ?? [novelId];
     try {
-      const rows = await this.dataSource.query(cfg.sql, [novelId]) as Record<string, unknown>[];
+      const rows = await this.dataSource.query(cfg.sql, params) as Record<string, unknown>[];
       const simplified = (rows || []).slice(0, 80).map((row) => {
         const out: Record<string, unknown> = {};
         cfg.fields.forEach((f) => {

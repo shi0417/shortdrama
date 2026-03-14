@@ -442,6 +442,7 @@ export class NarratorScriptService {
       shots: number;
       prompts: number;
       episodeCoverage: number;
+      batchCount?: number;
     };
   }> {
     let resolved: NarratorScriptDraftPayload;

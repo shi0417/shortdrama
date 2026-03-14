@@ -8,7 +8,8 @@
     "start": "node dist/main",
     "start:prod": "node dist/main",
     "db:migrate:production": "node scripts/run-production-migration.js",
-    "db:verify:production": "node scripts/verify-production-tables.js"
+    "db:verify:production": "node scripts/verify-production-tables.js",
+    "check:production-flow": "node scripts/check-production-flow.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",
