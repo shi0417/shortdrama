@@ -117,8 +117,15 @@ export interface NarratorScriptDraftPayload {
   meta?: NarratorScriptDraftMeta
 }
 
-/** 与后端 NARRATOR_DEFAULT_EXTENSION 对齐的默认参考表 */
-export const defaultNarratorReferenceTables: string[] = [
+/** 核心参考表（后端 getContext 始终读取，不通过 referenceTables 传；仅用于 UI 展示“始终包含”） */
+export const NARRATOR_CORE_REFERENCE_TABLES: Array<{ value: string; label: string }> = [
+  { value: 'novel_episodes', label: '分集信息（novel_episodes）' },
+  { value: 'drama_structure_template', label: '结构模板（drama_structure_template）' },
+  { value: 'novel_hook_rhythm', label: '钩子节奏（novel_hook_rhythm）' },
+]
+
+/** 默认勾选的扩展参考表（与后端 NARRATOR_DEFAULT_EXTENSION 对齐）；请求体 referenceTables 只传扩展表 */
+export const defaultNarratorOptionalReferenceTables: string[] = [
   'set_core',
   'set_payoff_arch',
   'set_payoff_lines',
@@ -129,6 +136,9 @@ export const defaultNarratorReferenceTables: string[] = [
   'novel_key_nodes',
   'novel_timelines',
 ]
+
+/** @deprecated 请使用 defaultNarratorOptionalReferenceTables */
+export const defaultNarratorReferenceTables = defaultNarratorOptionalReferenceTables
 
 export interface NarratorScriptReferenceSummaryItem {
   table: string

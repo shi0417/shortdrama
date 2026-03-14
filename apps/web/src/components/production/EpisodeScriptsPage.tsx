@@ -7,12 +7,14 @@ import {
   episodeScriptVersionApi,
   narratorScriptApi,
 } from '@/lib/episode-script-api'
+import { pipelineAiApi } from '@/lib/pipeline-ai-api'
 import type {
   EpisodeScriptVersion,
   NarratorScriptDraftPayload,
   NarratorScriptPersistResponse,
 } from '@/types/episode-script'
-import { defaultNarratorReferenceTables } from '@/types/episode-script'
+import { defaultNarratorOptionalReferenceTables } from '@/types/episode-script'
+import type { AiModelOptionDto } from '@/types/pipeline'
 import NarratorScriptGenerateDialog from './NarratorScriptGenerateDialog'
 
 const pageStyle: React.CSSProperties = {
@@ -47,7 +49,8 @@ export default function EpisodeScriptsPage({
   const [narratorBatchSize, setNarratorBatchSize] = useState(5)
   const [narratorStartEpisode, setNarratorStartEpisode] = useState(1)
   const [narratorEndEpisode, setNarratorEndEpisode] = useState(5)
-  const [narratorReferenceTables, setNarratorReferenceTables] = useState<string[]>(defaultNarratorReferenceTables)
+  const [narratorReferenceTables, setNarratorReferenceTables] = useState<string[]>(defaultNarratorOptionalReferenceTables)
+  const [narratorModels, setNarratorModels] = useState<AiModelOptionDto[]>([])
   const [narratorSourceTextCharBudget, setNarratorSourceTextCharBudget] = useState(25000)
   const [narratorUserInstruction, setNarratorUserInstruction] = useState('')
   const [narratorAllowPromptEdit, setNarratorAllowPromptEdit] = useState(false)
@@ -90,8 +93,8 @@ export default function EpisodeScriptsPage({
     new Set(versions.map((v) => v.episode_number))
   ).sort((a, b) => a - b)
 
-  const handleOpenGenerateDialog = () => {
-    setNarratorReferenceTables([...defaultNarratorReferenceTables])
+  const handleOpenGenerateDialog = async () => {
+    setNarratorReferenceTables([...defaultNarratorOptionalReferenceTables])
     setNarratorBatchSize(5)
     setNarratorStartEpisode(1)
     setNarratorEndEpisode(5)
@@ -102,6 +105,12 @@ export default function EpisodeScriptsPage({
     setNarratorReferenceSummary([])
     setNarratorWarnings([])
     setNarratorValidationWarnings([])
+    try {
+      const models = await pipelineAiApi.listAiModelOptions()
+      setNarratorModels(models ?? [])
+    } catch {
+      setNarratorModels([])
+    }
     setGenerateDialogOpen(true)
   }
 
@@ -271,6 +280,7 @@ export default function EpisodeScriptsPage({
 
       <NarratorScriptGenerateDialog
         open={generateDialogOpen}
+        models={narratorModels}
         modelKey={narratorModelKey}
         batchSize={narratorBatchSize}
         startEpisode={narratorStartEpisode}

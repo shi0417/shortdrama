@@ -1,9 +1,11 @@
 'use client'
 
 import type { NarratorScriptReferenceSummaryItem } from '@/types/episode-script'
-import { defaultNarratorReferenceTables } from '@/types/episode-script'
+import { NARRATOR_CORE_REFERENCE_TABLES } from '@/types/episode-script'
+import type { AiModelOptionDto } from '@/types/pipeline'
 
-const NARRATOR_REFERENCE_TABLE_OPTIONS: Array<{ value: string; label: string }> = [
+/** 扩展参考表选项（请求体 referenceTables 只传此类）；核心三表由后端固定读取，不在此列 */
+const NARRATOR_OPTIONAL_REFERENCE_TABLE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'set_core', label: '核心设定（set_core）' },
   { value: 'set_payoff_arch', label: '爽点架构（set_payoff_arch）' },
   { value: 'set_payoff_lines', label: '爽点线（set_payoff_lines）' },
@@ -21,6 +23,8 @@ const NARRATOR_REFERENCE_TABLE_OPTIONS: Array<{ value: string; label: string }> 
 
 export interface NarratorScriptGenerateDialogProps {
   open: boolean
+  /** 模型列表，来源 pipelineAiApi.listAiModelOptions() / ai-model-catalog */
+  models: AiModelOptionDto[]
   modelKey: string
   batchSize: number
   startEpisode: number
@@ -54,6 +58,7 @@ export interface NarratorScriptGenerateDialogProps {
 
 export default function NarratorScriptGenerateDialog({
   open,
+  models,
   modelKey,
   batchSize,
   startEpisode,
@@ -123,14 +128,22 @@ export default function NarratorScriptGenerateDialog({
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 8, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
             <label style={{ fontSize: 12 }}>
-              模型 key（可选）
-              <input
-                type="text"
+              AI 模型
+              <select
                 value={modelKey}
                 onChange={(e) => onChangeModelKey(e.target.value)}
-                placeholder="不填用后端默认"
                 style={{ width: '100%', padding: 6, marginTop: 4 }}
-              />
+              >
+                <option value="">不填用后端默认</option>
+                {models.map((m) => (
+                  <option key={m.id ?? m.modelKey} value={m.modelKey}>
+                    {m.displayName || m.modelKey}
+                  </option>
+                ))}
+                {modelKey && !models.some((m) => m.modelKey === modelKey) && (
+                  <option value={modelKey}>当前：{modelKey}</option>
+                )}
+              </select>
             </label>
             <label style={{ fontSize: 12 }}>
               每批集数
@@ -176,10 +189,24 @@ export default function NarratorScriptGenerateDialog({
             />
           </label>
 
+          <div style={{ border: '1px solid #e6f7ff', borderRadius: 6, padding: 10, background: '#f0f9ff' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>核心参考（始终包含）</div>
+            <div style={{ fontSize: 12, color: '#666', marginBottom: 6 }}>生成时始终包含以下三表，无需勾选</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {NARRATOR_CORE_REFERENCE_TABLES.map((item) => (
+                <span
+                  key={item.value}
+                  style={{ padding: '4px 10px', background: '#fff', border: '1px solid #91d5ff', borderRadius: 4, fontSize: 12 }}
+                >
+                  ✓ {item.label}
+                </span>
+              ))}
+            </div>
+          </div>
           <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 10 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>参考数据（多选）</div>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>扩展参考（多选）</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 6 }}>
-              {NARRATOR_REFERENCE_TABLE_OPTIONS.map((item) => (
+              {NARRATOR_OPTIONAL_REFERENCE_TABLE_OPTIONS.map((item) => (
                 <label key={item.value} style={{ fontSize: 12 }}>
                   <input
                     type="checkbox"
@@ -308,4 +335,4 @@ export default function NarratorScriptGenerateDialog({
   )
 }
 
-export { NARRATOR_REFERENCE_TABLE_OPTIONS }
+export { NARRATOR_OPTIONAL_REFERENCE_TABLE_OPTIONS }
