@@ -5,6 +5,7 @@ import { Novel, Theme } from '@/types'
 import { api } from '@/lib/api'
 import SourceTextManager from './SourceTextManager'
 import PipelinePanel from './PipelinePanel'
+import EpisodeComparePanel from './episode-compare/EpisodeComparePanel'
 
 interface ProjectDetailProps {
   novel: Novel
@@ -14,7 +15,7 @@ interface ProjectDetailProps {
 }
 
 export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: ProjectDetailProps) {
-  const [activeTab, setActiveTab] = useState<'basic' | 'source' | 'pipeline'>('basic')
+  const [activeTab, setActiveTab] = useState<'basic' | 'source' | 'pipeline' | 'episode-compare'>('basic')
   const [formData, setFormData] = useState({
     novelsName: novel.novelsName,
     description: novel.description || '',
@@ -106,6 +107,19 @@ export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: Pro
           }}
         >
           Pipeline
+        </button>
+        <button
+          onClick={() => setActiveTab('episode-compare')}
+          style={{
+            padding: '12px 24px',
+            border: 'none',
+            background: activeTab === 'episode-compare' ? 'white' : '#fafafa',
+            borderBottom: activeTab === 'episode-compare' ? '2px solid #1890ff' : '2px solid transparent',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'episode-compare' ? 500 : 400,
+          }}
+        >
+          Episode Compare
         </button>
       </div>
 
@@ -323,8 +337,10 @@ export default function ProjectDetail({ novel, themes, onUpdate, onDelete }: Pro
           </div>
         ) : activeTab === 'source' ? (
           <SourceTextManager novelId={novel.id} />
-        ) : (
+        ) : activeTab === 'pipeline' ? (
           <PipelinePanel novelId={novel.id} novelName={novel.novelsName} totalChapters={novel.totalChapters} />
+        ) : (
+          <EpisodeComparePanel novelId={novel.id} novelName={novel.novelsName} />
         )}
       </div>
     </div>

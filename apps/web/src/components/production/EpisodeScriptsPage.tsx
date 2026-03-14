@@ -1,0 +1,281 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { api } from '@/lib/api'
+import {
+  episodeScriptVersionApi,
+  narratorScriptApi,
+} from '@/lib/episode-script-api'
+import type {
+  EpisodeScriptVersion,
+  NarratorScriptDraftPayload,
+  NarratorScriptPersistResponse,
+} from '@/types/episode-script'
+
+const pageStyle: React.CSSProperties = {
+  padding: 24,
+  maxWidth: 1000,
+  margin: '0 auto',
+}
+
+/** API 错误里的业务错误码（apiClient 将响应体放在 error.payload） */
+function getErrorCode(e: unknown): string | undefined {
+  const err = e as { payload?: { code?: string }; response?: { data?: { code?: string } }; data?: { code?: string } }
+  return err?.payload?.code ?? err?.response?.data?.code ?? err?.data?.code
+}
+
+export default function EpisodeScriptsPage({
+  novelId,
+}: {
+  novelId: number
+}) {
+  const router = useRouter()
+  const [novelName, setNovelName] = useState('')
+  const [versions, setVersions] = useState<EpisodeScriptVersion[]>([])
+  const [summaryRows, setSummaryRows] = useState<Array<{ episode_number: number; id: number; version_no: number; title: string; script_type: string; scene_count?: number; shot_count?: number; prompt_count?: number }>>([])
+  const [loading, setLoading] = useState(true)
+  const [generating, setGenerating] = useState(false)
+  const [persisting, setPersisting] = useState(false)
+  const [draftId, setDraftId] = useState<string | null>(null)
+  const [lastDraft, setLastDraft] = useState<NarratorScriptDraftPayload | null>(null)
+  const [draftPreview, setDraftPreview] = useState<{ scripts: { episodeNumber: number; title: string }[] } | null>(null)
+
+  const load = async () => {
+    try {
+      setLoading(true)
+      const [novel, list, summary] = await Promise.all([
+        api.getNovel(novelId),
+        episodeScriptVersionApi.listByNovel(novelId),
+        episodeScriptVersionApi.listSummaryByNovel(novelId).catch(() => []),
+      ])
+      setNovelName(novel?.novelsName || '')
+      setVersions(list || [])
+      setSummaryRows(Array.isArray(summary) ? summary : [])
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+  }, [novelId])
+
+  const activeByEpisode = new Map<number, EpisodeScriptVersion>()
+  for (const v of versions) {
+    if (v.is_active === 1) {
+      activeByEpisode.set(v.episode_number, v)
+    }
+  }
+  const summaryByEpisode = new Map(summaryRows.map((r) => [r.episode_number, r]))
+  const episodeNumbers = Array.from(
+    new Set(versions.map((v) => v.episode_number))
+  ).sort((a, b) => a - b)
+
+  const handleGenerate = async () => {
+    try {
+      setGenerating(true)
+      setDraftId(null)
+      setLastDraft(null)
+      setDraftPreview(null)
+      const res = await narratorScriptApi.generateDraft(novelId)
+      setDraftId(res.draftId)
+      setLastDraft(res.draft ?? null)
+      setDraftPreview(
+        res.draft?.scripts
+          ? {
+              scripts: res.draft.scripts.map((s) => ({
+                episodeNumber: s.episodeNumber,
+                title: s.title,
+              })),
+            }
+          : null
+      )
+    } catch (e: unknown) {
+      alert((e as Error)?.message || '生成草稿失败')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const handlePersist = async () => {
+    if (!draftId && !lastDraft) {
+      alert('请先生成草稿后再保存（或草稿已过期，请重新生成）')
+      return
+    }
+    try {
+      setPersisting(true)
+      const payload = draftId ? { draftId, draft: lastDraft ?? undefined } : { draft: lastDraft! }
+      let res: NarratorScriptPersistResponse | undefined
+      try {
+        res = await narratorScriptApi.persistDraft(novelId, payload)
+      } catch (firstErr: unknown) {
+        const code = getErrorCode(firstErr)
+        if (code === 'NARRATOR_SCRIPT_DRAFT_CACHE_MISS' && lastDraft) {
+          res = await narratorScriptApi.persistDraft(novelId, { draft: lastDraft })
+        } else {
+          throw firstErr
+        }
+      }
+      if (res?.ok && res.summary) {
+        setDraftId(null)
+        setLastDraft(null)
+        setDraftPreview(null)
+        await load()
+        const s = res.summary
+        const msg = `保存成功：${s.scriptVersions} 版本，${s.scenes} 场，${s.shots} 镜，${s.prompts} 条提示词${s.episodeCoverage != null ? `，覆盖 ${s.episodeCoverage} 集` : ''}`
+        alert(msg)
+      }
+    } catch (e: unknown) {
+      const code = getErrorCode(e)
+      if (code === 'NARRATOR_SCRIPT_DRAFT_CACHE_MISS' && lastDraft) {
+        try {
+          const res = await narratorScriptApi.persistDraft(novelId, { draft: lastDraft })
+          if (res?.ok) {
+            setDraftId(null)
+            setLastDraft(null)
+            setDraftPreview(null)
+            await load()
+            alert('保存成功（已使用本地草稿重试）')
+          }
+        } catch (retryErr) {
+          alert((retryErr as Error)?.message || '保存失败')
+        }
+      } else {
+        alert((e as Error)?.message || '保存失败')
+      }
+    } finally {
+      setPersisting(false)
+    }
+  }
+
+  return (
+    <div style={pageStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h1 style={{ margin: 0, fontSize: 20 }}>
+          Episode Script - {novelName || `Novel ${novelId}`}
+        </h1>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => router.push(`/projects/${novelId}/pipeline/episode-compare`)}
+            style={{ padding: '6px 12px', cursor: 'pointer' }}
+          >
+            Compare
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push(`/projects/${novelId}/pipeline`)}
+            style={{ padding: '6px 12px', cursor: 'pointer' }}
+          >
+            返回 Pipeline
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          disabled={generating}
+          onClick={() => void handleGenerate()}
+          style={{ padding: '8px 16px', cursor: generating ? 'not-allowed' : 'pointer', background: '#1890ff', color: '#fff', border: 'none', borderRadius: 6 }}
+        >
+          {generating ? '生成中…' : '一键生成旁白主导脚本初稿'}
+        </button>
+        {draftId && (
+          <button
+            type="button"
+            disabled={persisting}
+            onClick={() => void handlePersist()}
+            style={{ padding: '8px 16px', cursor: persisting ? 'not-allowed' : 'pointer', background: '#52c41a', color: '#fff', border: 'none', borderRadius: 6 }}
+          >
+            {persisting ? '保存中…' : '保存草稿'}
+          </button>
+        )}
+      </div>
+
+      {draftPreview?.scripts?.length ? (
+        <div style={{ marginBottom: 16, padding: 12, background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 8 }}>
+          <strong>已生成未保存：</strong> 共 {draftPreview.scripts.length} 集草稿。请点击「保存草稿」写入脚本版本 / 场景 / 镜头 / 提示词。
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div>加载中…</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid #eee', textAlign: 'left' }}>
+              <th style={{ padding: 8 }}>集数</th>
+              <th style={{ padding: 8 }}>当前启用版本</th>
+              <th style={{ padding: 8 }}>场/镜/提示词</th>
+              <th style={{ padding: 8 }}>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {episodeNumbers.length === 0 ? (
+              <tr>
+                <td colSpan={4} style={{ padding: 16, color: '#999' }}>
+                  暂无脚本版本，可点击「一键生成旁白主导脚本初稿」生成。
+                </td>
+              </tr>
+            ) : (
+              episodeNumbers.map((ep) => {
+                const active = activeByEpisode.get(ep)
+                const sum = summaryByEpisode.get(ep)
+                return (
+                  <tr key={ep} style={{ borderBottom: '1px solid #eee' }}>
+                    <td style={{ padding: 8 }}>第 {ep} 集</td>
+                    <td style={{ padding: 8 }}>
+                      {active ? (
+                        <span>
+                          v{active.version_no} {active.title} ({active.script_type})
+                        </span>
+                      ) : (
+                        <span style={{ color: '#999' }}>无</span>
+                      )}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {sum != null ? (
+                        <span style={{ fontSize: 13, color: '#666' }}>
+                          {sum.scene_count ?? 0} 场 / {sum.shot_count ?? 0} 镜 / {sum.prompt_count ?? 0} 提示词
+                        </span>
+                      ) : (
+                        <span style={{ color: '#999' }}>-</span>
+                      )}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/projects/${novelId}/pipeline/episode-scripts/${ep}`)}
+                        style={{ marginRight: 8, padding: '4px 8px', cursor: 'pointer' }}
+                      >
+                        查看
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/projects/${novelId}/pipeline/episode-scripts/${ep}/scenes`)}
+                        style={{ marginRight: 8, padding: '4px 8px', cursor: 'pointer' }}
+                      >
+                        Scene Board
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/projects/${novelId}/pipeline/episode-scripts/${ep}/shots`)}
+                        style={{ padding: '4px 8px', cursor: 'pointer' }}
+                      >
+                        Shot Board
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}

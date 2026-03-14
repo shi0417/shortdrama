@@ -65,6 +65,7 @@ type Step3ModuleConfig = {
     | 'set_power_ladder'
     | 'set_traitor'
     | 'set_story_phases'
+    | 'character_visual_profiles'
   title: string
   mapping: string
   primaryResource?: PipelineResourceName
@@ -107,6 +108,13 @@ const modules: Step3ModuleConfig[] = [
     mapping: 'story-phases',
     primaryResource: 'story-phases',
     resources: ['story-phases'],
+  },
+  {
+    key: 'character_visual_profiles',
+    title: '7 角色视觉设定',
+    mapping: 'character-visual-profiles',
+    primaryResource: 'character-visual-profiles',
+    resources: ['character-visual-profiles'],
   },
 ]
 
@@ -1901,6 +1909,34 @@ export default function PipelinePanel({ novelId, novelName, totalChapters }: Pip
             }}
           >
             生成每集纲要和每集剧本
+          </button>
+          <button
+            onClick={() => router.push(`/projects/${novelId}/pipeline/episode-compare`)}
+            style={{
+              padding: '6px 12px',
+              border: '1px solid #1890ff',
+              borderRadius: '4px',
+              background: '#fff',
+              color: '#1890ff',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            Open Episode Compare
+          </button>
+          <button
+            onClick={() => router.push(`/projects/${novelId}/pipeline/episode-scripts`)}
+            style={{
+              padding: '6px 12px',
+              border: '1px solid #52c41a',
+              borderRadius: '4px',
+              background: '#fff',
+              color: '#52c41a',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            Episode Script 工作台
           </button>
         </div>
       </div>

@@ -6,6 +6,9 @@ export const allowedPipelineResources = [
   'characters',
   'key-nodes',
   'explosions',
+  'episodes',
+  'structure-templates',
+  'hook-rhythms',
   'skeleton-topics',
   'skeleton-topic-items',
   'payoff-arch',
@@ -17,6 +20,7 @@ export const allowedPipelineResources = [
   'traitors',
   'traitor-stages',
   'story-phases',
+  'character-visual-profiles',
 ] as const;
 
 export type PipelineResourceName = (typeof allowedPipelineResources)[number];

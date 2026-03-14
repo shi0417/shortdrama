@@ -89,8 +89,11 @@ export default function PipelineResourceManagerPage({
   }, [novelId, resource])
 
   const openCreate = () => {
+    const novelIdKey = config.fields.some((field) => field.key === 'novels_id')
+      ? 'novels_id'
+      : 'novel_id'
     setActiveRow({
-      novel_id: novelId,
+      [novelIdKey]: novelId,
       sort_order: 0,
     })
     setDialogMode('create')

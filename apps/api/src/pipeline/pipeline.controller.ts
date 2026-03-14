@@ -18,6 +18,11 @@ import {
   PipelineEpisodeScriptPreviewDto,
 } from './dto/pipeline-episode-script.dto';
 import {
+  NarratorScriptGenerateDraftDto,
+  NarratorScriptPersistDto,
+} from './dto/narrator-script.dto';
+import { NarratorScriptService } from './narrator-script.service';
+import {
   PipelineWorldviewGenerateDraftDto,
   PipelineWorldviewPersistDto,
   PipelineWorldviewPreviewDto,
@@ -35,6 +40,7 @@ export class PipelineController {
     private readonly pipelineReviewService: PipelineReviewService,
     private readonly pipelineWorldviewService: PipelineWorldviewService,
     private readonly pipelineEpisodeScriptService: PipelineEpisodeScriptService,
+    private readonly narratorScriptService: NarratorScriptService,
   ) {}
 
   @Get(':novelId/overview')
@@ -120,5 +126,21 @@ export class PipelineController {
     @Body() dto: PipelineEpisodeScriptPersistDto,
   ) {
     return this.pipelineEpisodeScriptService.persistDraft(novelId, dto);
+  }
+
+  @Post(':novelId/narrator-script-generate-draft')
+  generateNarratorScriptDraft(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: NarratorScriptGenerateDraftDto,
+  ) {
+    return this.narratorScriptService.generateDraft(novelId, dto);
+  }
+
+  @Post(':novelId/narrator-script-persist')
+  persistNarratorScriptDraft(
+    @Param('novelId', ParseIntPipe) novelId: number,
+    @Body() dto: NarratorScriptPersistDto,
+  ) {
+    return this.narratorScriptService.persistDraft(novelId, dto);
   }
 }

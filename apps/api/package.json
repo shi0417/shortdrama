@@ -6,7 +6,9 @@
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main",
-    "start:prod": "node dist/main"
+    "start:prod": "node dist/main",
+    "db:migrate:production": "node scripts/run-production-migration.js",
+    "db:verify:production": "node scripts/verify-production-tables.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",

@@ -10,6 +10,7 @@ type RowRecord = Record<string, unknown>;
 
 type ResourceConfig = {
   tableName: string;
+  novelIdColumn?: string;
   selectableFields: string[];
   editableFields: string[];
   numericFields?: string[];
@@ -106,6 +107,109 @@ const RESOURCE_CONFIG: Record<PipelineResourceName, ResourceConfig> = {
     ],
     numericFields: ['timeline_id', 'sort_order'],
     orderBy: 'sort_order ASC, id ASC',
+  },
+  episodes: {
+    tableName: 'novel_episodes',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'episode_number',
+      'episode_title',
+      'arc',
+      'opening',
+      'core_conflict',
+      'hooks',
+      'cliffhanger',
+      'full_content',
+      'outline_content',
+      'history_outline',
+      'rewrite_diff',
+      'structure_template_id',
+      'sort_order',
+      'created_at',
+    ],
+    editableFields: [
+      'episode_number',
+      'episode_title',
+      'arc',
+      'opening',
+      'core_conflict',
+      'hooks',
+      'cliffhanger',
+      'full_content',
+      'outline_content',
+      'history_outline',
+      'rewrite_diff',
+      'structure_template_id',
+      'sort_order',
+    ],
+    numericFields: ['episode_number', 'structure_template_id', 'sort_order'],
+    orderBy: 'episode_number ASC, id ASC',
+  },
+  'structure-templates': {
+    tableName: 'drama_structure_template',
+    novelIdColumn: 'novels_id',
+    selectableFields: [
+      'id',
+      'novels_id',
+      'chapter_id',
+      'power_level',
+      'is_power_up_chapter',
+      'power_up_content',
+      'theme_type',
+      'structure_name',
+      'identity_gap',
+      'pressure_source',
+      'first_reverse',
+      'continuous_upgrade',
+      'suspense_hook',
+      'typical_opening',
+      'suitable_theme',
+      'hot_level',
+      'remarks',
+      'create_time',
+    ],
+    editableFields: [
+      'chapter_id',
+      'power_level',
+      'is_power_up_chapter',
+      'power_up_content',
+      'theme_type',
+      'structure_name',
+      'identity_gap',
+      'pressure_source',
+      'first_reverse',
+      'continuous_upgrade',
+      'suspense_hook',
+      'typical_opening',
+      'suitable_theme',
+      'hot_level',
+      'remarks',
+    ],
+    numericFields: ['chapter_id', 'power_level', 'is_power_up_chapter', 'hot_level'],
+    orderBy: 'chapter_id ASC, id ASC',
+  },
+  'hook-rhythms': {
+    tableName: 'novel_hook_rhythm',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'episode_number',
+      'emotion_level',
+      'hook_type',
+      'description',
+      'cliffhanger',
+      'created_at',
+    ],
+    editableFields: [
+      'episode_number',
+      'emotion_level',
+      'hook_type',
+      'description',
+      'cliffhanger',
+    ],
+    numericFields: ['episode_number', 'emotion_level'],
+    orderBy: 'episode_number ASC, id ASC',
   },
   'skeleton-topics': {
     tableName: 'novel_skeleton_topics',
@@ -363,6 +467,42 @@ const RESOURCE_CONFIG: Record<PipelineResourceName, ResourceConfig> = {
     numericFields: ['start_ep', 'end_ep', 'sort_order'],
     orderBy: 'sort_order ASC, id ASC',
   },
+  'character-visual-profiles': {
+    tableName: 'character_visual_profiles',
+    selectableFields: [
+      'id',
+      'novel_id',
+      'character_id',
+      'profile_name',
+      'age_range',
+      'appearance_text',
+      'costume_text',
+      'hairstyle_text',
+      'expression_keywords',
+      'style_keywords',
+      'negative_keywords',
+      'reference_image_path',
+      'is_default',
+      'created_at',
+      'updated_at',
+    ],
+    editableFields: [
+      'character_id',
+      'profile_name',
+      'age_range',
+      'appearance_text',
+      'costume_text',
+      'hairstyle_text',
+      'expression_keywords',
+      'style_keywords',
+      'negative_keywords',
+      'reference_image_path',
+      'is_default',
+    ],
+    numericFields: ['character_id'],
+    booleanFields: ['is_default'],
+    orderBy: 'character_id ASC, id ASC',
+  },
 };
 
 @Injectable()
@@ -376,6 +516,7 @@ export class PipelineResourceService {
   ): Promise<RowRecord[]> {
     await this.assertNovelExists(novelId);
     const config = this.getConfig(resource);
+    const novelIdColumn = this.getNovelIdColumn(config);
 
     if (resource === 'skeleton-topic-items' && topicId) {
       await this.assertTopicBelongsToNovel(topicId, novelId);
@@ -383,7 +524,7 @@ export class PipelineResourceService {
 
     const fields = config.selectableFields.join(', ');
     const params: Array<number> = [novelId];
-    let whereClause = 'novel_id = ?';
+    let whereClause = `${novelIdColumn} = ?`;
     if (resource === 'skeleton-topic-items' && topicId) {
       whereClause += ' AND topic_id = ?';
       params.push(topicId);
@@ -416,6 +557,7 @@ export class PipelineResourceService {
   ): Promise<RowRecord> {
     await this.assertNovelExists(novelId);
     const config = this.getConfig(resource);
+    const novelIdColumn = this.getNovelIdColumn(config);
     const normalized = this.normalizeWritablePayload(config, payload, {
       novelId,
       resource,
@@ -458,12 +600,19 @@ export class PipelineResourceService {
       }
       await this.assertTraitorSystemBelongsToNovel(traitorSystemId, novelId);
     }
+    if (resource === 'character-visual-profiles') {
+      const characterId = normalized.character_id as number | null | undefined;
+      if (!characterId) {
+        throw new BadRequestException('character_id is required for character-visual-profiles');
+      }
+      await this.assertCharacterBelongsToNovel(characterId, novelId);
+    }
 
     if ('sort_order' in this.fieldsToObject(config.editableFields) && normalized.sort_order === undefined) {
       normalized.sort_order = 0;
     }
 
-    const columns = ['novel_id', ...Object.keys(normalized)];
+    const columns = [novelIdColumn, ...Object.keys(normalized)];
     const values = [novelId, ...columns.slice(1).map((field) => normalized[field])];
     const placeholders = columns.map(() => '?').join(', ');
 
@@ -489,7 +638,8 @@ export class PipelineResourceService {
       throw new NotFoundException(`${resource} record ${id} not found`);
     }
 
-    const novelId = Number(existing.novel_id);
+    const novelIdColumn = this.getNovelIdColumn(config);
+    const novelId = Number(existing[novelIdColumn]);
     const normalized = this.normalizeWritablePayload(config, payload, {
       novelId,
       resource,
@@ -544,6 +694,13 @@ export class PipelineResourceService {
       }
       await this.assertTraitorSystemBelongsToNovel(traitorSystemId, novelId);
     }
+    if (resource === 'character-visual-profiles' && fields.includes('character_id')) {
+      const characterId = normalized.character_id as number | null | undefined;
+      if (!characterId) {
+        throw new BadRequestException('character_id is required for character-visual-profiles');
+      }
+      await this.assertCharacterBelongsToNovel(characterId, novelId);
+    }
 
     const assignments = fields.map((field) => `${field} = ?`).join(', ');
     const params = [...fields.map((field) => normalized[field]), id];
@@ -576,6 +733,10 @@ export class PipelineResourceService {
       throw new BadRequestException(`Unsupported pipeline resource: ${resource}`);
     }
     return config;
+  }
+
+  private getNovelIdColumn(config: ResourceConfig): string {
+    return config.novelIdColumn || 'novel_id';
   }
 
   private async getRowById(
@@ -760,6 +921,21 @@ export class PipelineResourceService {
     if (!rows.length) {
       throw new NotFoundException(
         `Traitor system ${traitorSystemId} does not belong to novel ${novelId}`,
+      );
+    }
+  }
+
+  private async assertCharacterBelongsToNovel(
+    characterId: number,
+    novelId: number,
+  ): Promise<void> {
+    const rows = await this.dataSource.query(
+      `SELECT id FROM novel_characters WHERE id = ? AND novel_id = ? LIMIT 1`,
+      [characterId, novelId],
+    );
+    if (!rows.length) {
+      throw new NotFoundException(
+        `Character ${characterId} does not belong to novel ${novelId}`,
       );
     }
   }
