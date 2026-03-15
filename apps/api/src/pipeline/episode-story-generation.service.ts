@@ -368,6 +368,9 @@ export class EpisodeStoryGenerationService {
       const batch = beatBatches[i];
       const startEp = batch[0]?.episodeNumber ?? i * batchSize + 1;
       const endEp = batch[batch.length - 1]?.episodeNumber ?? startEp + batch.length - 1;
+      this.logger.log(
+        `[episode-story][generateDraft] batch ${i + 1}/${beatBatches.length} startEp=${startEp} endEp=${endEp} calling runBeatPlanner`,
+      );
 
       const beats = await this.runBeatPlanner(
         usedModelKey,
@@ -376,6 +379,9 @@ export class EpisodeStoryGenerationService {
         prevTailBeat,
       );
 
+      this.logger.log(
+        `[episode-story][generateDraft] batch ${i + 1}/${beatBatches.length} startEp=${startEp} endEp=${endEp} calling runP2WriterBatch`,
+      );
       const batchDraft = await this.runP2WriterBatch(
         usedModelKey,
         novelId,
@@ -412,8 +418,15 @@ export class EpisodeStoryGenerationService {
         }
 
         if (rewriteResult.finalDiagnosis.needsRewrite) {
+          const issueTypes = rewriteResult.finalDiagnosis.issues
+            .filter((i) => i.severity === 'high')
+            .map((i) => i.type)
+            .join('、');
           warnings.push(
-            `第${ep.episodeNumber}集：自动重写 ${rewriteResult.rewriteAttempts} 次后仍有问题（${rewriteResult.finalDiagnosis.issues.filter((i) => i.severity === 'high').map((i) => i.type).join('、')}），建议人工审阅。`,
+            `第${ep.episodeNumber}集：自动重写 ${rewriteResult.rewriteAttempts} 次后仍有问题（${issueTypes}），建议人工审阅。`,
+          );
+          this.logger.error(
+            `[episode-story][generateDraft] ep=${ep.episodeNumber} still needsRewrite after ${rewriteResult.rewriteAttempts} attempts. issues=${JSON.stringify(rewriteResult.finalDiagnosis.issues)}`,
           );
         }
 
@@ -1091,14 +1104,22 @@ export class EpisodeStoryGenerationService {
         { role: 'user', content: userMsg },
       ],
     });
+    this.logger.debug(`[episode-story][beat-planner] Request body preview: ${body.slice(0, 500)}`);
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body,
     });
     const raw = await res.text();
-    this.logger.log(`[episode-story][beat-planner][raw] preview=${raw.trim().slice(0, 500)}`);
-    if (!res.ok) throw new BadRequestException(`Beat Planner request failed: ${res.status}`);
+    this.logger.log(
+      `[episode-story][beat-planner][raw] status=${res.status} preview=${raw.trim().slice(0, 500)}`,
+    );
+    if (!res.ok) {
+      this.logger.error(
+        `[episode-story][beat-planner] LLM request failed: status=${res.status}, raw=${raw.slice(0, 2000)}`,
+      );
+      throw new BadRequestException(`Beat Planner request failed: ${res.status}`);
+    }
 
     const content = this.extractModelContent(raw);
     const parsed = this.parseJsonFromText(content);
@@ -1109,10 +1130,14 @@ export class EpisodeStoryGenerationService {
           (parsed as Record<string, unknown>)?.episodes ??
           [];
     const arr: unknown[] = Array.isArray(parsedBeats) ? parsedBeats : [];
+    this.logger.debug(`[episode-story][beat-planner] Parsed beats count: ${arr.length}`);
 
     if (arr.length !== batch.length) {
       this.logger.warn(
         `[episode-story][beat-planner] expected=${batch.length} actual=${arr.length}`,
+      );
+      this.logger.error(
+        `[episode-story][beat-planner] count mismatch; parsed summary: ${JSON.stringify(parsed).slice(0, 1500)}`,
       );
     }
 
@@ -1202,7 +1227,9 @@ export class EpisodeStoryGenerationService {
         { role: 'user', content: userMsg },
       ],
     });
-
+    this.logger.debug(
+      `[episode-story][p2-writer] Request body preview: ${body.slice(0, 500)}`,
+    );
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -1210,9 +1237,14 @@ export class EpisodeStoryGenerationService {
     });
     const raw = await res.text();
     this.logger.log(
-      `[episode-story][p2-writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][raw] preview=${raw.trim().slice(0, 500)}`,
+      `[episode-story][p2-writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][raw] status=${res.status} preview=${raw.trim().slice(0, 500)}`,
     );
-    if (!res.ok) throw new BadRequestException(`P2 Writer batch request failed: ${res.status}`);
+    if (!res.ok) {
+      this.logger.error(
+        `[episode-story][p2-writer] LLM request failed: status=${res.status}, raw=${raw.slice(0, 2000)}`,
+      );
+      throw new BadRequestException(`P2 Writer batch request failed: ${res.status}`);
+    }
 
     const content = this.extractModelContent(raw);
     const parsed = this.parseJsonFromText(content);
@@ -1225,15 +1257,20 @@ export class EpisodeStoryGenerationService {
     this.logger.log(
       `[episode-story][p2-writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][parse] arrLen=${arr.length}`,
     );
+    this.logger.debug(
+      `[episode-story][p2-writer] Parsed items count: ${arr.length}`,
+    );
 
     if (arr.length === 0) {
-      this.logger.warn('[episode-story][p2-writer] empty result, throwing');
+      this.logger.error(
+        `[episode-story][p2-writer] Empty result from LLM. Raw response: ${raw.slice(0, 2000)}`,
+      );
       throw new BadRequestException('P2 Writer returned empty result.');
     }
 
     if (arr.length < beats.length) {
-      this.logger.warn(
-        `[episode-story][p2-writer] fewer items than beats: arrLen=${arr.length} beatsLen=${beats.length}`,
+      this.logger.error(
+        `[episode-story][p2-writer] fewer items than beats: arrLen=${arr.length} beatsLen=${beats.length}. Raw preview: ${raw.slice(0, 1500)}`,
       );
       throw new BadRequestException('P2 Writer returned fewer items than requested batch.');
     }
@@ -1252,6 +1289,9 @@ export class EpisodeStoryGenerationService {
         normalizedStoryText.trim() !== PLACEHOLDER_STORY_TEXT_TEMPLATE(epNum);
 
       if (!isValid) {
+        this.logger.warn(
+          `[episode-story][p2-writer] Invalid storyText for ep=${epNum}. length=${normalizedStoryText?.length ?? 0} isPlaceholder=${normalizedStoryText?.trim() === PLACEHOLDER_STORY_TEXT_TEMPLATE(epNum)}. Content preview: ${(normalizedStoryText ?? '').slice(0, 100)}`,
+        );
         invalidStoryTextCount += 1;
       } else {
         out.push({
@@ -1401,7 +1441,9 @@ ${originalStoryText}
         { role: 'user', content: userMsg },
       ],
     });
-
+    this.logger.debug(
+      `[episode-story][auto-rewrite] Request body preview: ${body.slice(0, 500)}`,
+    );
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -1412,8 +1454,8 @@ ${originalStoryText}
       `[episode-story][auto-rewrite] ep=${episodeNumber} status=${res.status} rawPreview=${raw.trim().slice(0, 300)}`,
     );
     if (!res.ok) {
-      this.logger.warn(
-        `[episode-story][auto-rewrite] ep=${episodeNumber} request failed: ${res.status}`,
+      this.logger.error(
+        `[episode-story][auto-rewrite] ep=${episodeNumber} LLM request failed: status=${res.status}, raw=${raw.slice(0, 2000)}`,
       );
       throw new BadRequestException(
         `Auto-rewrite request failed for ep=${episodeNumber}: ${res.status}`,
@@ -1424,8 +1466,8 @@ ${originalStoryText}
     const rewritten = content.trim();
 
     if (rewritten.length < MIN_STORY_TEXT_LENGTH_ABSOLUTE) {
-      this.logger.warn(
-        `[episode-story][auto-rewrite] ep=${episodeNumber} rewritten text too short: ${rewritten.length}`,
+      this.logger.error(
+        `[episode-story][auto-rewrite] ep=${episodeNumber} rewritten text too short: length=${rewritten.length}. Content: ${rewritten.slice(0, 500)}`,
       );
       throw new BadRequestException(
         `Auto-rewrite returned too-short text for ep=${episodeNumber}`,
@@ -1488,8 +1530,10 @@ ${originalStoryText}
           );
         }
       } catch (err) {
-        this.logger.warn(
-          `[episode-story][auto-rewrite-loop] ep=${episodeNumber} rewrite attempt=${attempts} failed: ${err}`,
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `[episode-story][auto-rewrite-loop] ep=${episodeNumber} rewrite attempt=${attempts} failed: ${errMsg}`,
+          err instanceof Error ? err.stack : undefined,
         );
         break;
       }
