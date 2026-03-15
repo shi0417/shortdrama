@@ -1102,11 +1102,13 @@ export class EpisodeStoryGenerationService {
 
     const content = this.extractModelContent(raw);
     const parsed = this.parseJsonFromText(content);
-    const arr = Array.isArray(parsed)
-      ? parsed
-      : (parsed as Record<string, unknown>)?.beats ??
-        (parsed as Record<string, unknown>)?.episodes ??
-        [];
+    const parsedBeats =
+      Array.isArray(parsed)
+        ? parsed
+        : (parsed as Record<string, unknown>)?.beats ??
+          (parsed as Record<string, unknown>)?.episodes ??
+          [];
+    const arr: unknown[] = Array.isArray(parsedBeats) ? parsedBeats : [];
 
     if (arr.length !== batch.length) {
       this.logger.warn(
@@ -1215,9 +1217,10 @@ export class EpisodeStoryGenerationService {
     const content = this.extractModelContent(raw);
     const parsed = this.parseJsonFromText(content);
     const withEpisodes = parsed as unknown[] | { episodes?: unknown[] };
-    const arr = Array.isArray(withEpisodes)
+    const parsedItems = Array.isArray(withEpisodes)
       ? withEpisodes
       : (withEpisodes as Record<string, unknown>)?.episodes ?? [];
+    const arr: unknown[] = Array.isArray(parsedItems) ? parsedItems : [];
 
     this.logger.log(
       `[episode-story][p2-writer][batch ${batchIndex ?? '?'}/${totalBatches ?? '?'}][parse] arrLen=${arr.length}`,
