@@ -1188,7 +1188,42 @@ export class EpisodeStoryGenerationService {
           production_elements: { key_characters: [], key_locations: [], key_props: [] },
         });
       } else {
-        beats.push(rawBeat);
+        let beatToPush: StoryBeatJson = rawBeat;
+        const episodeNumber = rawBeat.episode_meta.episode_number;
+        if (episodeNumber >= 59 && episodeNumber <= 61) {
+          const needsBlocks =
+            !rawBeat.execution_blocks || rawBeat.execution_blocks.length === 0;
+          const needsClosure = !rawBeat.ending_closure;
+          if (needsBlocks || needsClosure) {
+            beatToPush = { ...rawBeat };
+            if (needsBlocks) {
+              beatToPush.execution_blocks = [
+                { block_no: 1, purpose: 'hook', must_show: [], forbidden: [] },
+                { block_no: 2, purpose: 'conflict', must_show: [], forbidden: [] },
+                { block_no: 3, purpose: 'reversal', must_show: [], forbidden: [] },
+                { block_no: 4, purpose: 'climax_tail', must_show: [], forbidden: [] },
+              ];
+              this.logger.log(
+                `[episode-story][beat-planner][finale-fix] ep=${episodeNumber} injected execution_blocks`,
+              );
+            }
+            if (needsClosure) {
+              beatToPush.ending_closure = {
+                required: true,
+                required_outcome: [
+                  '守住南京',
+                  '稳住朝局',
+                  '叛党被清或内奸伏法',
+                  '建文帝权力稳固',
+                ],
+              };
+              this.logger.log(
+                `[episode-story][beat-planner][finale-fix] ep=${episodeNumber} injected ending_closure`,
+              );
+            }
+          }
+        }
+        beats.push(beatToPush);
       }
     }
 
@@ -1437,6 +1472,19 @@ export class EpisodeStoryGenerationService {
     const issuesJson = JSON.stringify(diagnosis.issues, null, 2);
     const beatJson = JSON.stringify(beat, null, 2);
 
+    const issueTypes = diagnosis.issues.map((i) => i.type);
+    const needsStructuralFinale =
+      issueTypes.includes('rewrite_goal_violation') ||
+      issueTypes.includes('ending_closure_missing');
+
+    const repairInstruction = needsStructuralFinale
+      ? `本次不是最小化修补。允许对全文最后约 30% 做结构性重写。
+必须兑现 story_beat_json 中的 ending_closure.required_outcome。
+必须把终局结果写实：南京守住、朝局稳住、叛党/内奸被清、建文帝权力稳固。
+允许调整结尾段落顺序与事件呈现方式，但不要改坏前文已正确部分。
+只输出修复后的纯故事文本。`
+      : `请仅针对 QA 错误报告中指出的问题进行最小化修复，保持原文风格和正确部分不变。只输出修复后的纯故事文本。`;
+
     const userMsg = `请修复以下第 ${episodeNumber} 集的故事文本。
 
 【原始节拍规划 (story_beat_json)】
@@ -1448,11 +1496,11 @@ ${issuesJson}
 【有问题的故事文本 (storyText)】
 ${originalStoryText}
 
-请仅针对 QA 错误报告中指出的问题进行最小化修复，保持原文风格和正确部分不变。只输出修复后的纯故事文本。`;
+${repairInstruction}`;
 
     const promptChars = AUTO_REWRITE_SYSTEM_PROMPT.length + userMsg.length;
     this.logger.log(
-      `[episode-story][auto-rewrite] ep=${episodeNumber} issueCount=${diagnosis.issues.length} promptChars=${promptChars}`,
+      `[episode-story][auto-rewrite] ep=${episodeNumber} issueCount=${diagnosis.issues.length} promptChars=${promptChars} mode=${needsStructuralFinale ? 'structural-finale-rewrite' : 'minimal-fix'}`,
     );
 
     const body = JSON.stringify({
