@@ -19,6 +19,7 @@ import { EpisodeStoryVersionService } from './episode-story-version.service';
 import { NarratorScriptService } from './narrator-script.service';
 import { EpisodeStoryGenerationService } from './episode-story-generation.service';
 import { PipelineReferenceContextService } from './pipeline-reference-context.service';
+import { MaterialSiftingService } from './material-sifting.service';
 import { SourceTextsModule } from '../source-texts/source-texts.module';
 
 @Module({
@@ -37,6 +38,7 @@ import { SourceTextsModule } from '../source-texts/source-texts.module';
     PipelineResourceService,
     PipelineWorldviewService,
     PipelineReferenceContextService,
+    MaterialSiftingService,
     PipelineEpisodeScriptService,
     EpisodeCompareService,
     EpisodeScriptVersionService,
@@ -47,5 +49,6 @@ import { SourceTextsModule } from '../source-texts/source-texts.module';
     EpisodeStoryGenerationService,
     NarratorScriptService,
   ],
+  exports: [MaterialSiftingService],
 })
 export class PipelineModule {}
