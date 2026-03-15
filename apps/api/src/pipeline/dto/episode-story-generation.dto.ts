@@ -40,12 +40,14 @@ export const allowedEpisodeStoryReferenceTables = [
 export type EpisodeStoryReferenceTable =
   (typeof allowedEpisodeStoryReferenceTables)[number];
 
-/** 单集草稿 */
+/** 单集草稿（含 planner 的 storyBeat，便于 persist 写入 story_beat_json） */
 export interface EpisodeStoryDraftEpisode {
   episodeNumber: number;
   title?: string;
   summary?: string;
   storyText: string;
+  /** 规划节拍，来自 planner；persist 时可写入 story_beat_json */
+  storyBeat?: string;
 }
 
 /** 故事草稿 */

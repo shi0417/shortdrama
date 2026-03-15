@@ -4,6 +4,8 @@ export interface EpisodeStoryDraftEpisode {
   title?: string
   summary?: string
   storyText: string
+  /** 规划节拍，来自 planner；persist 时写入 story_beat_json */
+  storyBeat?: string
 }
 
 /** 故事草稿 */
