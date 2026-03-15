@@ -92,6 +92,25 @@ export interface EvidenceTimelineEvent {
   sortOrder?: number;
 }
 
+/**
+ * 视觉形象档案 — 多模态扩展预留。
+ * 用于存储人物/场景的视觉参考信息，供未来图像生成或视觉一致性校验使用。
+ */
+export interface VisualProfile {
+  /** 档案类型：character=人物形象，location=场景，prop=道具 */
+  profileType: 'character' | 'location' | 'prop';
+  /** 关联名称（人物名/场景名/道具名） */
+  name: string;
+  /** 视觉描述文本（服饰、外貌、环境特征等） */
+  visualDescription?: string;
+  /** 参考图片 URL 列表（预留） */
+  referenceImageUrls?: string[];
+  /** 风格标签（如：古装、宫廷、战场等） */
+  styleTags?: string[];
+  /** 色彩基调（如：暗红、金黄、青灰等） */
+  colorPalette?: string[];
+}
+
 /** 权力阶梯（来自 set_power_ladder，覆盖本集的档位） */
 export interface EvidencePowerLevel {
   levelNo?: number;
@@ -211,4 +230,8 @@ export interface DramaticEvidencePack {
   timelineEvents: EvidenceTimelineEvent[];
   /** 本集相关史料/原文摘要（与 sourceMaterialContext.excerpt 一致或衍生） */
   sourceSummary?: string;
+
+  // ---------- 多模态扩展预留 ----------
+  /** 视觉形象档案列表（人物/场景/道具），供未来图像生成与视觉一致性校验使用 */
+  visualProfiles?: VisualProfile[];
 }

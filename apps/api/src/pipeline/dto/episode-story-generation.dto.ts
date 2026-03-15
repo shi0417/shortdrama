@@ -48,6 +48,8 @@ export interface EpisodeStoryDraftEpisode {
   storyText: string;
   /** 规划节拍，来自 planner；persist 时可写入 story_beat_json */
   storyBeat?: string;
+  /** 用户反馈（反馈闭环预留）：用于存储用户对本集的修改意见，供自动重写代理参考 */
+  userFeedback?: string;
 }
 
 /** 故事草稿 */

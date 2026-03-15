@@ -25,6 +25,10 @@ const EPISODE_KEYWORDS_MAX = 20;
 const KEY_NODES_OR_TIMELINES_TOP = 4;
 const ACTIVE_OPPONENTS_MAX = 3;
 const VISUAL_ANCHORS_MAX = 10;
+/** 段落上下文扩展：命中段前后各拉取的段数 */
+const SEGMENT_CONTEXT_EXPAND = 1;
+/** 段落边界截断的最小保留字符数 */
+const PARAGRAPH_BOUNDARY_MIN_CHARS = 500;
 
 @Injectable()
 export class MaterialSiftingService {
@@ -323,10 +327,17 @@ export class MaterialSiftingService {
     const r = Array.isArray(rows) ? rows[0] : rows;
     const content = r && typeof r === 'object' ? (r as Record<string, unknown>).content : null;
     const text = typeof content === 'string' ? content : '';
-    const excerpt =
-      text.length > SOURCE_EXCERPT_MAX_CHARS
-        ? text.slice(0, SOURCE_EXCERPT_MAX_CHARS) + '…'
-        : text || undefined;
+    let excerpt: string | undefined;
+    if (text.length > SOURCE_EXCERPT_MAX_CHARS) {
+      // 段落边界截断：在限制字符数附近找最近的段落结束符（句号/换行）
+      excerpt = this.truncateAtParagraphBoundary(text, SOURCE_EXCERPT_MAX_CHARS);
+      this.logger.log(
+        `[material-sifting][fetchSourceMaterialContext] novelId=${novelId} ep=${episodeNumber} ` +
+          `sourceTextLen=${text.length} truncatedTo=${excerpt.length} (paragraph-boundary)`,
+      );
+    } else {
+      excerpt = text || undefined;
+    }
     return { excerpt };
   }
 
@@ -365,27 +376,69 @@ export class MaterialSiftingService {
     keywords.slice(0, 10).forEach((k) => {
       params.push(`%${k}%`, `%${k}%`);
     });
-    const rows = await this.dataSource.query(
+    // 第一步：查询命中的段落及其 segment_index
+    const hitRows = await this.dataSource.query(
       `SELECT content_text, segment_index FROM novel_source_segments
        WHERE novel_id = ? AND is_active = 1 AND (${conditions})
        ORDER BY segment_index ASC
        LIMIT ?`,
       [...params, SOURCE_SEGMENTS_MAX],
     );
-    const arr = Array.isArray(rows) ? rows : [];
-    if (arr.length === 0) return undefined;
+    const hitArr = Array.isArray(hitRows) ? hitRows : [];
+    if (hitArr.length === 0) return undefined;
+
+    // 第二步：收集命中段的 segment_index，并扩展前后各 SEGMENT_CONTEXT_EXPAND 段
+    const hitIndices = new Set<number>();
+    const expandedIndices = new Set<number>();
+    for (const row of hitArr) {
+      const idx = Number((row as Record<string, unknown>).segment_index);
+      if (!Number.isNaN(idx)) {
+        hitIndices.add(idx);
+        // 扩展前后段落以获取完整上下文
+        for (let offset = -SEGMENT_CONTEXT_EXPAND; offset <= SEGMENT_CONTEXT_EXPAND; offset++) {
+          const expandIdx = idx + offset;
+          if (expandIdx >= 0) expandedIndices.add(expandIdx);
+        }
+      }
+    }
+
+    // 第三步：查询扩展后的所有段落
+    const sortedIndices = Array.from(expandedIndices).sort((a, b) => a - b);
+    if (sortedIndices.length === 0) return undefined;
+
+    const placeholders = sortedIndices.map(() => '?').join(',');
+    const expandedRows = await this.dataSource.query(
+      `SELECT content_text, segment_index FROM novel_source_segments
+       WHERE novel_id = ? AND is_active = 1 AND segment_index IN (${placeholders})
+       ORDER BY segment_index ASC`,
+      [novelId, ...sortedIndices],
+    );
+    const expandedArr = Array.isArray(expandedRows) ? expandedRows : [];
+
+    // 第四步：按完整段落累加，超限时停止追加（不截断当前段落）
     let total = 0;
     const excerpts: string[] = [];
-    for (const row of arr) {
+    let truncatedChars = 0;
+    for (const row of expandedArr) {
       const text = (row as Record<string, unknown>).content_text as string | undefined;
       if (typeof text !== 'string') continue;
-      if (total + text.length > SOURCE_EXCERPT_MAX_CHARS) {
-        excerpts.push(text.slice(0, SOURCE_EXCERPT_MAX_CHARS - total));
-        break;
+      // 若加入当前段落会超限，且已有内容，则停止追加
+      if (total + text.length > SOURCE_EXCERPT_MAX_CHARS && excerpts.length > 0) {
+        truncatedChars += text.length;
+        continue; // 跳过后续段落，保持已有段落完整
       }
       excerpts.push(text);
       total += text.length;
+      // 若单段已超限（极端情况），允许该段完整保留后停止
+      if (total >= SOURCE_EXCERPT_MAX_CHARS) break;
     }
+
+    if (truncatedChars > 0) {
+      this.logger.log(
+        `[material-sifting][fetchSourceExcerptByKeywords] novelId=${novelId} truncatedChars=${truncatedChars} (kept ${excerpts.length} complete paragraphs)`,
+      );
+    }
+
     return excerpts.length ? excerpts.join('\n\n') : undefined;
   }
 
@@ -733,5 +786,33 @@ export class MaterialSiftingService {
       event: (r as Record<string, unknown>).event as string | undefined,
       sortOrder: (r as Record<string, unknown>).sort_order as number | undefined,
     }));
+  }
+
+  /**
+   * 在段落边界处截断文本，避免在句子或段落中间切断。
+   * 优先在 maxChars 附近找换行符或句号，若找不到则硬截断。
+   */
+  private truncateAtParagraphBoundary(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+
+    // 在 maxChars 位置向前搜索段落边界（换行、句号、问号、感叹号）
+    const searchStart = Math.max(0, maxChars - PARAGRAPH_BOUNDARY_MIN_CHARS);
+    const searchRegion = text.slice(searchStart, maxChars);
+
+    // 优先找换行符（段落边界）
+    const lastNewline = searchRegion.lastIndexOf('\n');
+    if (lastNewline !== -1) {
+      return text.slice(0, searchStart + lastNewline + 1).trimEnd() + '…';
+    }
+
+    // 其次找中文句号、问号、感叹号
+    const sentenceEndMatch = searchRegion.match(/.*[。！？]/);
+    if (sentenceEndMatch) {
+      const endPos = searchStart + sentenceEndMatch[0].length;
+      return text.slice(0, endPos) + '…';
+    }
+
+    // 找不到合适边界，硬截断
+    return text.slice(0, maxChars) + '…';
   }
 }
