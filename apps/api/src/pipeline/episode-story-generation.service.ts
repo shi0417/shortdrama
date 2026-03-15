@@ -206,6 +206,59 @@ const P2_WRITER_SYSTEM_PROMPT = `### ROLE: Short-Drama Script Executor
 
 只输出严格 JSON 数组，每项含 episodeNumber、title、summary、storyText。不要 markdown 和解释。`;
 
+/** P3: 自动重写最大重试次数 */
+const AUTO_REWRITE_MAX_RETRIES = 2;
+
+/** P3: 自动重写代理的 System Prompt */
+const AUTO_REWRITE_SYSTEM_PROMPT = `### ROLE: Short-Drama Script Doctor
+
+你是一名经验丰富的剧本医生。你的任务是根据 QA 报告，修复一段未能严格遵循节拍规划的故事文本。
+
+### INPUT
+你将收到三份材料：
+1. **原始节拍规划 (story_beat_json)**：这是"标准答案"，修复后的文本必须 100% 符合它。
+2. **有问题的故事文本 (storyText)**：这是需要修复的原始文本。
+3. **QA 错误报告 (qa_issues)**：这是一个结构化的错误列表，明确指出了哪些地方不合格。
+
+### EXECUTION PROCESS
+1. [Diagnose]: 仔细阅读 QA 错误报告中的每一条错误，理解问题的根源。
+2. [Locate]: 在原始 storyText 中定位与每条错误对应的文本段落。
+3. [Repair]: 仅针对错误报告中指出的问题，对故事文本进行最小化的、精准的修改。
+4. [Preserve]: 保持原文的风格、语气和其余正确部分不变。不要重写整篇文章。
+5. [Verify]: 确保修改后的文本符合节拍规划中的所有节拍（hook_3s, conflict_15s, mid_reversal, climax, tail_hook）。
+
+### REPAIR RULES（按错误类型的修复策略）
+
+- **narration_too_short**（字数不足360字）：在现有段落之间补充具体的动作描写、环境细节、对话片段，使总字数达到 360-520 字。不要添加无意义的水词。
+- **third_person_summary**（第一人称不足）：将第三人称描述改为沈照的第一人称旁白视角「我」。前两句必须自然出现「我」。
+- **event_density_low**（动作事件密度不足）：将心理描写和总结性语句替换为具体的动作事件（递、交、送、入殿、跪、传旨、搜、查、抓、揭发、审问等）。
+- **weak_hook / severe_weak_hook**（结尾钩子空泛）：将结尾的抽象词（"风暴将至""暗流涌动"）替换为具体的事件型尾钩，必须涉及具体人名/物件/时间点（如"沈照""密折""今晚""城门"等）。
+- **question_hook_only**（仅问句钩子）：在问句之前或之后补充一个已经发生或即将发生的具体事件。
+- **rewrite_goal_violation**（与改写目标不符）：删除或改写涉及"朱棣攻破南京""建文朝覆灭"等内容，确保建文帝守住江山。
+- **ending_closure_missing**（终局缺少收束）：为终局段（59-61集）补充具体的胜利机制或扭转结果。
+
+### ABSOLUTE COMMANDMENTS
+1. 全文必须由沈照以第一人称「我」持续叙述。
+2. 修复后的文本必须在 360-520 中文字之间。
+3. 必须忠实实现 story_beat_json 中定义的每一个节拍事件。
+4. 结尾必须是事件型尾钩，禁止仅用抽象词收尾。
+5. 本项目改写目标：沈照改写靖难之役，建文帝守住江山，朱棣不能按历史成功夺位。
+
+### OUTPUT
+只输出修复后的纯故事文本（storyText），不要 JSON 包裹，不要 markdown，不要解释。`;
+
+/** P3: 单集 QA 诊断结果，用于传递给自动重写代理 */
+interface EpisodeQaDiagnosis {
+  episodeNumber: number;
+  issues: {
+    type: string;
+    message: string;
+    severity: 'low' | 'medium' | 'high';
+  }[];
+  /** 是否需要自动重写（存在 high severity 问题） */
+  needsRewrite: boolean;
+}
+
 interface CachedStoryDraft {
   novelId: number;
   draft: EpisodeStoryDraft;
@@ -339,7 +392,33 @@ export class EpisodeStoryGenerationService {
         success: true,
         episodeCount: batchDraft.length,
       });
-      allEpisodes.push(...batchDraft);
+
+      // P3: 对本批每集执行自动重写检查
+      for (let j = 0; j < batchDraft.length; j++) {
+        const ep = batchDraft[j];
+        const beatForEp = beats[j] ?? beats[0];
+        const rewriteResult = await this.autoRewriteIfNeeded(
+          usedModelKey,
+          ep.episodeNumber,
+          ep.storyText ?? '',
+          beatForEp,
+        );
+
+        if (rewriteResult.wasRewritten) {
+          this.logger.log(
+            `[episode-story][P3] ep=${ep.episodeNumber} rewritten after ${rewriteResult.rewriteAttempts} attempt(s)`,
+          );
+          ep.storyText = rewriteResult.finalStoryText;
+        }
+
+        if (rewriteResult.finalDiagnosis.needsRewrite) {
+          warnings.push(
+            `第${ep.episodeNumber}集：自动重写 ${rewriteResult.rewriteAttempts} 次后仍有问题（${rewriteResult.finalDiagnosis.issues.filter((i) => i.severity === 'high').map((i) => i.type).join('、')}），建议人工审阅。`,
+          );
+        }
+
+        allEpisodes.push(ep);
+      }
 
       if (batchDraft.length) {
         const last = batchDraft[batchDraft.length - 1];
@@ -1202,6 +1281,229 @@ export class EpisodeStoryGenerationService {
     }
 
     return out;
+  }
+
+  /**
+   * P3: 对单集 storyText 进行 QA 诊断，返回结构化的问题列表。
+   * 复用 evaluateStoryTextForShortDrama 的逻辑，
+   * 输出为 EpisodeQaDiagnosis 格式，供 autoRewrite 使用。
+   */
+  private diagnoseEpisode(
+    episodeNumber: number,
+    storyText: string,
+  ): EpisodeQaDiagnosis {
+    const ev = this.evaluateStoryTextForShortDrama(episodeNumber, storyText);
+    const issues: EpisodeQaDiagnosis['issues'] = [];
+
+    if (ev.charCount < MIN_NARRATION_CHARS_STRONG) {
+      issues.push({
+        type: 'narration_too_short',
+        message: `字数仅 ${ev.charCount} 字，不足 ${MIN_NARRATION_CHARS_STRONG} 字，无法支撑 60 秒可拍短剧旁白。需要补充具体动作描写和环境细节，使总字数达到 360-520 字。`,
+        severity: 'high',
+      });
+    }
+
+    if (ev.thirdPersonSummaryRisk || !ev.firstPersonLeadOk) {
+      issues.push({
+        type: 'third_person_summary',
+        message: `第一人称旁白不足或第三人称摘要化（前200字中"我"出现 ${ev.firstPersonCount} 次，"沈照/她"出现 ${ev.thirdPersonLeadCount} 次）。需要改为沈照第一人称「我」视角叙述，前两句必须出现「我」。`,
+        severity: 'high',
+      });
+    }
+
+    if (ev.eventDensitySeverelyLow) {
+      issues.push({
+        type: 'event_density_low',
+        message: `动作事件密度严重不足（动作事件词命中 ${ev.actionEventHitCount} 次，心理摘要词命中 ${ev.summaryPhraseHitCount} 次）。需要将心理描写替换为具体动作事件（递、交、送、入殿、跪、传旨、搜、查、抓等）。`,
+        severity: 'high',
+      });
+    }
+
+    if (episodeNumber < 59 && ev.severeWeakHook) {
+      issues.push({
+        type: 'severe_weak_hook',
+        message: '结尾钩子过于空泛（仅抽象词无具体对象）。需要将结尾替换为具体的事件型尾钩，涉及具体人名/物件/时间点。',
+        severity: 'high',
+      });
+    }
+
+    if (episodeNumber < 59 && ev.questionHookOnly) {
+      issues.push({
+        type: 'question_hook_only',
+        message: '结尾仅问句钩子，缺少事件型尾钩。需要在问句之前或之后补充一个已经发生或即将发生的具体事件。',
+        severity: 'high',
+      });
+    }
+
+    if (ev.rewriteGoalViolation) {
+      issues.push({
+        type: 'rewrite_goal_violation',
+        message: '内容与改写目标不符（出现朱棣攻破南京、建文朝覆灭等）。需要删除或改写相关内容，确保建文帝守住江山。',
+        severity: 'high',
+      });
+    }
+
+    if (episodeNumber >= 59 && ev.endingClosureMissing) {
+      issues.push({
+        type: 'ending_closure_missing',
+        message: '终局阶段缺少明确收束结果。需要补充具体的胜利机制或扭转结果（守住南京、稳住朝局、叛党被清等）。',
+        severity: 'high',
+      });
+    }
+
+    const needsRewrite = issues.some((i) => i.severity === 'high');
+    return { episodeNumber, issues, needsRewrite };
+  }
+
+  /**
+   * P3: 自动重写代理 — 接收有问题的 storyText、原始 beat 规划和 QA 诊断，
+   * 调用 AI "剧本医生" 进行精准修复，返回修复后的 storyText。
+   */
+  private async runAutoRewrite(
+    modelKey: string,
+    episodeNumber: number,
+    originalStoryText: string,
+    beat: StoryBeatJson,
+    diagnosis: EpisodeQaDiagnosis,
+  ): Promise<string> {
+    const endpoint = this.getLcApiEndpoint();
+    const apiKey = this.getLcApiKey();
+
+    const issuesJson = JSON.stringify(diagnosis.issues, null, 2);
+    const beatJson = JSON.stringify(beat, null, 2);
+
+    const userMsg = `请修复以下第 ${episodeNumber} 集的故事文本。
+
+【原始节拍规划 (story_beat_json)】
+${beatJson}
+
+【QA 错误报告 (qa_issues)】
+${issuesJson}
+
+【有问题的故事文本 (storyText)】
+${originalStoryText}
+
+请仅针对 QA 错误报告中指出的问题进行最小化修复，保持原文风格和正确部分不变。只输出修复后的纯故事文本。`;
+
+    const promptChars = AUTO_REWRITE_SYSTEM_PROMPT.length + userMsg.length;
+    this.logger.log(
+      `[episode-story][auto-rewrite] ep=${episodeNumber} issueCount=${diagnosis.issues.length} promptChars=${promptChars}`,
+    );
+
+    const body = JSON.stringify({
+      model: modelKey,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: AUTO_REWRITE_SYSTEM_PROMPT },
+        { role: 'user', content: userMsg },
+      ],
+    });
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body,
+    });
+    const raw = await res.text();
+    this.logger.log(
+      `[episode-story][auto-rewrite] ep=${episodeNumber} status=${res.status} rawPreview=${raw.trim().slice(0, 300)}`,
+    );
+    if (!res.ok) {
+      this.logger.warn(
+        `[episode-story][auto-rewrite] ep=${episodeNumber} request failed: ${res.status}`,
+      );
+      throw new BadRequestException(
+        `Auto-rewrite request failed for ep=${episodeNumber}: ${res.status}`,
+      );
+    }
+
+    const content = this.extractModelContent(raw);
+    const rewritten = content.trim();
+
+    if (rewritten.length < MIN_STORY_TEXT_LENGTH_ABSOLUTE) {
+      this.logger.warn(
+        `[episode-story][auto-rewrite] ep=${episodeNumber} rewritten text too short: ${rewritten.length}`,
+      );
+      throw new BadRequestException(
+        `Auto-rewrite returned too-short text for ep=${episodeNumber}`,
+      );
+    }
+
+    this.logger.log(
+      `[episode-story][auto-rewrite] ep=${episodeNumber} originalLen=${originalStoryText.length} rewrittenLen=${rewritten.length}`,
+    );
+    return rewritten;
+  }
+
+  /**
+   * P3: 对单集执行"诊断 → 自动重写 → 再诊断"循环。
+   * 最多重试 AUTO_REWRITE_MAX_RETRIES 次。
+   * 返回最终的 storyText（可能是原始的，也可能是重写后的）和诊断结果。
+   */
+  private async autoRewriteIfNeeded(
+    modelKey: string,
+    episodeNumber: number,
+    storyText: string,
+    beat: StoryBeatJson,
+  ): Promise<{
+    finalStoryText: string;
+    wasRewritten: boolean;
+    rewriteAttempts: number;
+    finalDiagnosis: EpisodeQaDiagnosis;
+  }> {
+    let currentText = storyText;
+    let diagnosis = this.diagnoseEpisode(episodeNumber, currentText);
+    let attempts = 0;
+    let wasRewritten = false;
+
+    while (diagnosis.needsRewrite && attempts < AUTO_REWRITE_MAX_RETRIES) {
+      attempts++;
+      this.logger.log(
+        `[episode-story][auto-rewrite-loop] ep=${episodeNumber} attempt=${attempts}/${AUTO_REWRITE_MAX_RETRIES} issues=${diagnosis.issues.filter((i) => i.severity === 'high').map((i) => i.type).join(',')}`,
+      );
+
+      try {
+        const rewritten = await this.runAutoRewrite(
+          modelKey,
+          episodeNumber,
+          currentText,
+          beat,
+          diagnosis,
+        );
+        currentText = rewritten;
+        wasRewritten = true;
+
+        diagnosis = this.diagnoseEpisode(episodeNumber, currentText);
+
+        if (!diagnosis.needsRewrite) {
+          this.logger.log(
+            `[episode-story][auto-rewrite-loop] ep=${episodeNumber} FIXED after attempt=${attempts}`,
+          );
+        } else {
+          this.logger.warn(
+            `[episode-story][auto-rewrite-loop] ep=${episodeNumber} still has issues after attempt=${attempts}: ${diagnosis.issues.filter((i) => i.severity === 'high').map((i) => i.type).join(',')}`,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[episode-story][auto-rewrite-loop] ep=${episodeNumber} rewrite attempt=${attempts} failed: ${err}`,
+        );
+        break;
+      }
+    }
+
+    if (diagnosis.needsRewrite && attempts >= AUTO_REWRITE_MAX_RETRIES) {
+      this.logger.warn(
+        `[episode-story][auto-rewrite-loop] ep=${episodeNumber} exhausted ${AUTO_REWRITE_MAX_RETRIES} retries, still has high issues`,
+      );
+    }
+
+    return {
+      finalStoryText: currentText,
+      wasRewritten,
+      rewriteAttempts: attempts,
+      finalDiagnosis: diagnosis,
+    };
   }
 
   /** @deprecated P1 legacy writer — 保留用于 fallback */
