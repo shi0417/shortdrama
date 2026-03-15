@@ -139,10 +139,25 @@ export interface PlotlineContext {
   requiredHookRhythm: EvidenceHookRhythm | null;
 }
 
-/** 5. source_material_context：史料原文（初期截取前 N 字；最终可做 Top-K 语义检索） */
+/** 5. source_material_context：史料原文（按本集关键词检索 segments，无命中时 fallback 截断） */
 export interface SourceMaterialContext {
-  /** 初期简化：drama_source_text 前 10000 字；最终目标：按 outline 向量 Top-K 检索结果 */
+  /** 按 outline/core_conflict/hooks/cliffhanger 关键词匹配 novel_source_segments；无命中时 drama_source_text 截断 */
   excerpt?: string;
+}
+
+/** 本集编剧材料包扩展：单集目标、可拍锚点、禁止方向、衔接提示 */
+export interface EvidencePackExtension {
+  /** 从 core_conflict / outline_content 提炼的本集唯一目标（一句） */
+  episodeGoal?: string;
+  /** 从 opening/hooks/cliffhanger/keyNodes/timelineEvents 提取的 5~10 条可拍画面锚点 */
+  visualAnchors: string[];
+  /** 至少包含 rewrite_goal 禁止项与终局禁止项（59-61 集） */
+  forbiddenDirections: string[];
+  /** 衔接：上一集带入 + 本集结尾留给下一集的提示 */
+  continuity: {
+    continuityIn?: string;
+    continuityOutHint?: string;
+  };
 }
 
 /**
@@ -166,8 +181,14 @@ export interface DramaticEvidencePack {
   /** 4. 情节线语境（活跃爽点线、本集钩子要求） */
   plotlineContext: PlotlineContext;
 
-  /** 5. 史料语境（原文摘录，初期前 10000 字） */
+  /** 5. 史料语境（原文摘录，按本集关键词检索或 fallback） */
   sourceMaterialContext: SourceMaterialContext;
+
+  /** 本集专属编剧扩展：episodeGoal、visualAnchors、forbiddenDirections、continuity */
+  episodeGoal?: string;
+  visualAnchors: string[];
+  forbiddenDirections: string[];
+  continuity: EvidencePackExtension['continuity'];
 
   // ---------- 以下保留原有平铺结构，便于兼容 ----------
   /** 本集分集信息 */

@@ -70,7 +70,21 @@ const ENDING_RESOLUTION_PATTERNS = /守住南京|稳住朝局|皇权得以稳固
 /** 第三轮：终局仍开环/继续预警 */
 const ENDING_OPEN_LOOP_PATTERNS = /下一场风暴|更深层的威胁|更大的危机还在后面|只是开始|还远未结束|真正的考验才刚开始|下一步仍需警戒|还有更可怕的敌人|更深的阴谋正在逼近/;
 
-/** P2: Beat Planner 输出的结构化节拍规划 */
+/** P2: 执行块 — 导演执行谱，每块至少包含必须呈现与禁止项 */
+interface ExecutionBlockJson {
+  block_no: number;
+  purpose: string;
+  must_show: string[];
+  forbidden: string[];
+}
+
+/** P2: 终局收束（仅 59-61 集） */
+interface EndingClosureJson {
+  required: boolean;
+  required_outcome: string[];
+}
+
+/** P2: Beat Planner 输出的结构化节拍规划（策划说明 + 执行谱） */
 interface StoryBeatJson {
   episode_meta: {
     episode_number: number;
@@ -102,9 +116,13 @@ interface StoryBeatJson {
     };
     tail_hook: {
       description: string;
-      hook_type: 'event_cliffhanger' | 'new_mystery' | 'character_in_danger' | 'goal_achieved_new_problem';
+      hook_type: 'event_cliffhanger' | 'new_mystery' | 'character_in_danger' | 'goal_achieved_new_problem' | 'closure_aftermath';
     };
   };
+  /** 导演执行谱：至少 4 块 hook / conflict / reversal / climax_tail，每块 must_show / forbidden */
+  execution_blocks?: ExecutionBlockJson[];
+  /** 终局集(59-61)必填：required=true, required_outcome 至少含 守住南京、稳住朝局、叛党被清/内奸伏法、建文帝权力稳固 */
+  ending_closure?: EndingClosureJson;
   production_elements: {
     key_characters: string[];
     key_locations: string[];
@@ -113,96 +131,94 @@ interface StoryBeatJson {
 }
 
 /** P2: Beat Planner 的 System Prompt */
-const BEAT_PLANNER_SYSTEM_PROMPT = `### ROLE: Short-Drama Beat Planner
+const BEAT_PLANNER_SYSTEM_PROMPT = `### ROLE: Short-Drama Beat Planner（策划 + 导演执行谱）
 
-你是一名顶级的短剧编剧专家，你的任务是为一部历史改写题材的短剧，规划其中若干集的详细故事节拍 (Beat)。你将收到一份关于本批各集的"戏剧证据包"（JSON格式），里面包含了所有你需要知道的背景信息。你的唯一任务是为每一集输出一份严格遵循指定 JSON Schema 的"故事节拍规划"。
+你为历史改写题材短剧规划每集的「故事节拍」与「执行块」。证据包中已包含本集专属的 episodeGoal、visualAnchors、forbiddenDirections、continuity。输出须严格符合下方 JSON Schema。
 
 ### OUTPUT JSON Schema（每集一个对象，最终输出为数组）
 
-每集的 story_beat_json 必须严格遵循以下结构：
+每集必须包含 episode_meta、pacing_structure、execution_blocks、production_elements。若本批含第 59/60/61 集，则该集还须包含 ending_closure。
+
 {
   "episode_meta": {
     "episode_number": <integer>,
     "title": "<本集标题>",
     "summary": "<一句话概述本集核心情节>",
-    "single_goal": "<本集主角的唯一、明确、可衡量的核心目标>",
+    "single_goal": "<本集唯一、可衡量的核心目标，与证据包 episodeGoal 一致>",
     "antagonist_goal": "<本集核心对手的冲突性目标>",
-    "theme_expression": "<本集如何体现或推进某条核心设定/爽点线/权力阶梯>"
+    "theme_expression": "<本集如何体现或推进某条核心设定/爽点线>"
   },
   "pacing_structure": {
     "target_duration_seconds": 60,
     "estimated_word_count": 400,
-    "hook_3s": {
-      "description": "<开篇3-5秒的钩子，必须是具体的、可视化的事件或画面>",
-      "hook_type": "<visual_shock|suspenseful_question|action_start|dramatic_reveal>"
-    },
-    "conflict_15s": {
-      "description": "<15秒内核心冲突如何被引入或激化>",
-      "protagonist_action": "<主角的具体行动>",
-      "antagonist_reaction": "<对手的直接反应>"
-    },
-    "mid_reversal": {
-      "description": "<中段40%-70%处的明确情势逆转或信息反转>",
-      "reversal_type": "<power_dynamic_shift|information_reveal|ally_betrayal|plan_failure|unexpected_ally>"
-    },
-    "climax": {
-      "description": "<本集冲突的最高潮，主角与对手的直接对抗>",
-      "outcome": "<这次对抗的直接结果>"
-    },
+    "hook_3s": { "description": "<具体、可视化开篇事件>", "hook_type": "<visual_shock|suspenseful_question|action_start|dramatic_reveal>" },
+    "conflict_15s": { "description": "<15秒内冲突引入>", "protagonist_action": "<具体行动>", "antagonist_reaction": "<直接反应>" },
+    "mid_reversal": { "description": "<中段明确转折>", "reversal_type": "<power_dynamic_shift|information_reveal|ally_betrayal|plan_failure|unexpected_ally>" },
+    "climax": { "description": "<最高潮对抗>", "outcome": "<直接结果>" },
     "tail_hook": {
-      "description": "<结尾钩子，必须是具体的、未解决的事件>",
-      "hook_type": "<event_cliffhanger|new_mystery|character_in_danger|goal_achieved_new_problem>"
+      "description": "<结尾：非终局集=具体未解决事件型悬念；59-61集=仅允许「胜局后余震」或「收束后余味」>",
+      "hook_type": "<event_cliffhanger|new_mystery|character_in_danger|goal_achieved_new_problem|closure_aftermath>"
     }
   },
+  "execution_blocks": [
+    { "block_no": 1, "purpose": "hook", "must_show": ["<必须出现的具体画面/动作>"], "forbidden": ["<禁止的写法>"] },
+    { "block_no": 2, "purpose": "conflict", "must_show": [], "forbidden": [] },
+    { "block_no": 3, "purpose": "reversal", "must_show": [], "forbidden": [] },
+    { "block_no": 4, "purpose": "climax_tail", "must_show": [], "forbidden": [] }
+  ],
+  "ending_closure": "仅当 episode_meta.episode_number 为 59、60 或 61 时必填，见下方说明",
   "production_elements": {
     "key_characters": ["<本集出场核心人物>"],
-    "key_locations": ["<本集关键场景地点>"],
+    "key_locations": ["<本集关键场景>"],
     "key_props": ["<本集关键道具>"]
   }
 }
 
+**ending_closure（仅 59/60/61 集）**：
+{
+  "required": true,
+  "required_outcome": ["守住南京", "稳住朝局", "叛党被清或内奸伏法", "建文帝权力稳固"]
+}
+
 ### CORE INSTRUCTIONS
 
-1. [Define the Core]: 基于证据包中的 temporal_context（故事阶段）和 character_context（主角即时目标），为每集定义 single_goal 和 antagonist_goal。
-2. [Plan the Hook]: 查看 plotline_context 中的 required_hook_rhythm 和 active_payoff_lines，设计一个能在3-5秒内抓住眼球的具体、可视化的事件。
-3. [Introduce Conflict]: 将 single_goal 与 antagonist_goal 直接碰撞，设计具体的 protagonist_action 和 antagonist_reaction。
-4. [Engineer the Reversal]: 设计一个打破观众预期的具体转折事件，与 active_payoff_lines 结合。
-5. [Design the Climax]: 将反转后的困境推向顶点，展现最激烈的对抗和具体结果。
-6. [Set the Tail Hook]: 基于 climax 的 outcome，制造一个具体的、未解决的事件型悬念。
+1. [Define the Core]: 用证据包中的 episodeGoal、character_context 定义 single_goal；用 visualAnchors 约束 must_show。
+2. [Execution Blocks]: 至少 4 块：hook / conflict / reversal / climax_tail。每块 must_show 写清「必须拍出的具体动作/画面」，forbidden 写清「禁止仅用心理句、总结句替代」。
+3. [Finale Mode 59-61]: 若本集为第 59、60 或 61 集，必须输出 ending_closure.required=true，required_outcome 至少包含：守住南京、稳住朝局、叛党被清/内奸伏法、建文帝权力稳固。tail_hook 只能是「胜局后的最后余震」或「收束后的余味」，禁止普通大开环尾钩（如「还有更大阴谋」「真正的考验才刚开始」）。
+4. [Tail Hook]: 非终局集 = 具体事件型悬念；终局集 = 仅 closure_aftermath 或收束余味。
 
 ### CONSTRAINTS
 
-- 所有节拍描述必须是具体的、可视化的动作/事件/对话，禁止抽象描述。
-- 输出必须是严格 JSON 数组，每项为一集的 story_beat_json。不要 markdown、不要解释。
-- 所有规划必须基于戏剧证据包，不要凭空捏造与证据包无关的人物或情节线。
+- 所有节拍与 must_show 必须是具体、可视化的动作/事件，禁止抽象描述。
+- 输出为严格 JSON 数组，每项为一集 story_beat_json。不要 markdown、不要解释。
+- 必须遵守证据包中的 forbiddenDirections（含改写目标与终局禁止项）。
 - 本项目改写目标：沈照改写靖难之役，建文帝守住江山，朱棣不能按历史成功夺位。`;
 
 /** P2: 按谱填词的 Writer System Prompt */
-const P2_WRITER_SYSTEM_PROMPT = `### ROLE: Short-Drama Script Executor
+const P2_WRITER_SYSTEM_PROMPT = `### ROLE: Short-Drama Script Executor（按执行块逐块写）
 
-你是一名专业的短剧执行编剧。你的任务不是从零创作，而是将一份已经规划好的、高度结构化的"故事节拍规划" (story_beat_json)，精准地、忠实地扩写成生动、连贯、可拍摄的 60/90 秒短剧故事正文 (storyText)。
+你的任务是将 story_beat_json（含 pacing_structure 与 execution_blocks）忠实地扩写成可拍摄的 60/90 秒短剧故事正文 (storyText)。必须按 execution_blocks 顺序展开，每个 block 至少落成一段具体动作，禁止用心理句/总结句替代 must_show。
 
 ### EXECUTION PROCESS
 
-1. [Internalize the Blueprint]: 仔细阅读并完全理解 story_beat_json 中的每一个节拍描述。这是你的剧本。
-2. [Write Beat by Beat]:
-   - Opening (Hook): 将 hook_3s 的描述直接转化为故事开篇第一句或第一段，创造强烈视觉冲击力。
-   - Inciting Incident (Conflict): 紧接着将 conflict_15s 无缝衔接，生动描绘 protagonist_action 和 antagonist_reaction 的交锋。
-   - Midpoint (Reversal): 在故事文本的中间部分(40%-70%位置)，实现 mid_reversal 中描述的具体转折事件。
-   - Climax: 紧随反转之后，将 climax 扩写为故事最高潮，用最激烈的动作和对抗展现 outcome。
-   - Ending (Tail Hook): 用 tail_hook 的描述作为故事结尾，留下具体的、未解决的悬念。
-3. [Polish]: 确保段落过渡流畅，语言生动，充满画面感。
+1. [Internalize]: 读懂每集的 episode_meta、pacing_structure、execution_blocks；若有 ending_closure，则终局集最后一段必须兑现 required_outcome。
+2. [Write Block by Block]: 严格按 execution_blocks 顺序写：
+   - block 1 (hook): 将 hook_3s + 该块 must_show 写成开篇具体画面/动作，不得用概括句替代。
+   - block 2 (conflict): 将 conflict_15s + must_show 写成具体交锋，禁止只写「局势紧张」。
+   - block 3 (reversal): 将 mid_reversal + must_show 写成具体转折事件。
+   - block 4 (climax_tail): 将 climax 与 tail_hook + must_show 写成高潮与结尾。若该集有 ending_closure，则最后一段必须明确写出：南京是否守住、朝局是否稳住、叛党/内奸是否被清、建文帝是否稳住皇权。
+3. [Must-Show]: 每个 execution_block 的 must_show 列表中的每一项，必须在正文中有对应的一句或一段具体描写，不能只用「我意识到」「局势紧张」等替代。
+4. [Finale 59-61]: 若 episode_number 为 59、60 或 61，结尾必须写清：守住南京、稳住朝局、叛党/内奸被清、建文帝权力稳固；禁止使用普通大开环尾钩（如「还有更大阴谋」「真正的考验才刚开始」）。
 
 ### ABSOLUTE COMMANDMENTS
 
-1. 每集 = 60秒可拍短剧单元（默认），建议 360–520 中文字。禁止写成剧情简介、总结、提纲。
-2. 全文必须由沈照以第一人称「我」持续叙述。前两句必须自然出现「我」。禁止第三人称简介、百科式、梗概式说明。
-3. 你绝不能偏离 story_beat_json 中定义的任何一个节拍事件。如果节拍说"主角打翻了烛台"，你就不能写成"主角推倒了书架"。
-4. 不要写总结性句子如"主角陷入了危机"。要写"冰冷的剑锋已经架在了她的脖子上，殿外传来了禁军整齐的脚步声。" Show, Don't Tell!
-5. 多用短句，多写动作、表情、眼神和具体环境细节。避免大段心理描写和抽象形容词。
-6. 严格按照 hook_3s -> conflict_15s -> mid_reversal -> climax -> tail_hook 的顺序和节奏组织故事文本。
-7. 结尾必须是事件型尾钩（已发生或即将发生的事件），不能只是抽象感慨或空问句。禁止仅用"风暴将至""暗流涌动""局势紧张"收尾。
-8. 本项目改写目标：沈照改写靖难之役，建文帝守住江山，朱棣不能按历史成功夺位。结局不得出现朱棣攻破南京、建文朝覆灭等跑偏内容。
+1. 每集 360–520 中文字，60 秒可拍单元。禁止剧情简介、总结、提纲。
+2. 全文沈照第一人称「我」叙述，前两句必须出现「我」。
+3. 绝不偏离 story_beat_json 的节拍与 execution_blocks 的 must_show；禁止用总结句替代具体动作。
+4. Show, Don't Tell：写具体动作、表情、环境，不写「主角陷入危机」这类概括。
+5. 严格按 hook_3s -> conflict_15s -> mid_reversal -> climax -> tail_hook（即 execution_blocks 顺序）组织正文。
+6. 非终局集结尾=事件型尾钩；终局集(59-61)=收束结果+禁止大开环。
+7. 改写目标：建文帝守住江山，朱棣不能成功夺位。禁止朱棣攻破南京、建文朝覆灭等。
 
 只输出严格 JSON 数组，每项含 episodeNumber、title、summary、storyText。不要 markdown 和解释。`;
 
@@ -212,40 +228,34 @@ const AUTO_REWRITE_MAX_RETRIES = 2;
 /** P3: 自动重写代理的 System Prompt */
 const AUTO_REWRITE_SYSTEM_PROMPT = `### ROLE: Short-Drama Script Doctor
 
-你是一名经验丰富的剧本医生。你的任务是根据 QA 报告，修复一段未能严格遵循节拍规划的故事文本。
+你根据 QA 报告修复未达标的 storyText。若问题包含 rewrite_goal_violation 或 ending_closure_missing，允许对结尾 30% 做结构性重写，而非仅做最小字面修补。
 
 ### INPUT
-你将收到三份材料：
-1. **原始节拍规划 (story_beat_json)**：这是"标准答案"，修复后的文本必须 100% 符合它。
-2. **有问题的故事文本 (storyText)**：这是需要修复的原始文本。
-3. **QA 错误报告 (qa_issues)**：这是一个结构化的错误列表，明确指出了哪些地方不合格。
+1. **story_beat_json**：修复后须符合其节拍与 execution_blocks；若含 ending_closure，须兑现 required_outcome。
+2. **storyText**：待修复的正文。
+3. **qa_issues**：错误列表。
 
-### EXECUTION PROCESS
-1. [Diagnose]: 仔细阅读 QA 错误报告中的每一条错误，理解问题的根源。
-2. [Locate]: 在原始 storyText 中定位与每条错误对应的文本段落。
-3. [Repair]: 仅针对错误报告中指出的问题，对故事文本进行最小化的、精准的修改。
-4. [Preserve]: 保持原文的风格、语气和其余正确部分不变。不要重写整篇文章。
-5. [Verify]: 确保修改后的文本符合节拍规划中的所有节拍（hook_3s, conflict_15s, mid_reversal, climax, tail_hook）。
+### REPAIR RULES
 
-### REPAIR RULES（按错误类型的修复策略）
+- **narration_too_short**：补充具体动作、环境、对话，达到 360-520 字。
+- **third_person_summary**：改为沈照第一人称「我」，前两句出现「我」。
+- **event_density_low**：用具体动作事件（递、交、送、入殿、跪、传旨、搜、查、抓、揭发、审问等）替换心理/总结句。
+- **weak_hook / severe_weak_hook**：结尾改为具体事件型尾钩（人名/物件/时间点）。
+- **question_hook_only**：在问句前后补具体已发生或即将发生的事件。
+- **rewrite_goal_violation**：禁止最小修补。允许对结尾 30% 做结构性重写，删除或改写「朱棣攻破南京」「建文朝覆灭」等，确保建文帝守住江山。
+- **ending_closure_missing**：禁止最小修补。若 story_beat_json 含 ending_closure，必须优先兑现 required_outcome（守住南京、稳住朝局、叛党/内奸被清、建文帝权力稳固）；允许重写结尾 30% 以明确收束结果。
 
-- **narration_too_short**（字数不足360字）：在现有段落之间补充具体的动作描写、环境细节、对话片段，使总字数达到 360-520 字。不要添加无意义的水词。
-- **third_person_summary**（第一人称不足）：将第三人称描述改为沈照的第一人称旁白视角「我」。前两句必须自然出现「我」。
-- **event_density_low**（动作事件密度不足）：将心理描写和总结性语句替换为具体的动作事件（递、交、送、入殿、跪、传旨、搜、查、抓、揭发、审问等）。
-- **weak_hook / severe_weak_hook**（结尾钩子空泛）：将结尾的抽象词（"风暴将至""暗流涌动"）替换为具体的事件型尾钩，必须涉及具体人名/物件/时间点（如"沈照""密折""今晚""城门"等）。
-- **question_hook_only**（仅问句钩子）：在问句之前或之后补充一个已经发生或即将发生的具体事件。
-- **rewrite_goal_violation**（与改写目标不符）：删除或改写涉及"朱棣攻破南京""建文朝覆灭"等内容，确保建文帝守住江山。
-- **ending_closure_missing**（终局缺少收束）：为终局段（59-61集）补充具体的胜利机制或扭转结果。
+### STRUCTURAL REWRITE（当 qa_issues 含 rewrite_goal_violation 或 ending_closure_missing）
+- 可对全文最后约 30% 进行结构性重写，而不只改一两句。
+- 终局集(59-61)：修复目标优先兑现 ending_closure.required_outcome，结尾必须写清收束。
 
 ### ABSOLUTE COMMANDMENTS
-1. 全文必须由沈照以第一人称「我」持续叙述。
-2. 修复后的文本必须在 360-520 中文字之间。
-3. 必须忠实实现 story_beat_json 中定义的每一个节拍事件。
-4. 结尾必须是事件型尾钩，禁止仅用抽象词收尾。
-5. 本项目改写目标：沈照改写靖难之役，建文帝守住江山，朱棣不能按历史成功夺位。
+1. 沈照第一人称「我」；360-520 字。
+2. 符合 story_beat_json 的节拍与 execution_blocks；若有 ending_closure 必须兑现。
+3. 改写目标：建文帝守住江山，朱棣不能成功夺位。
 
 ### OUTPUT
-只输出修复后的纯故事文本（storyText），不要 JSON 包裹，不要 markdown，不要解释。`;
+只输出修复后的纯故事文本，不要 JSON、不要 markdown、不要解释。`;
 
 /** P3: 单集 QA 诊断结果，用于传递给自动重写代理 */
 interface EpisodeQaDiagnosis {
@@ -1148,10 +1158,12 @@ export class EpisodeStoryGenerationService {
         this.logger.warn(
           `[episode-story][beat-planner] invalid beat for ep=${batch[i].episodeNumber}, using fallback`,
         );
+        const epNum = batch[i].episodeNumber;
+        const isFinale = epNum >= 59 && epNum <= 61;
         beats.push({
           episode_meta: {
-            episode_number: batch[i].episodeNumber,
-            title: batch[i].title ?? `第${batch[i].episodeNumber}集`,
+            episode_number: epNum,
+            title: batch[i].title ?? `第${epNum}集`,
             summary: batch[i].summary ?? '',
             single_goal: '',
             antagonist_goal: '',
@@ -1164,8 +1176,15 @@ export class EpisodeStoryGenerationService {
             conflict_15s: { description: '', protagonist_action: '', antagonist_reaction: '' },
             mid_reversal: { description: '', reversal_type: 'information_reveal' },
             climax: { description: '', outcome: '' },
-            tail_hook: { description: '', hook_type: 'event_cliffhanger' },
+            tail_hook: { description: '', hook_type: isFinale ? 'closure_aftermath' : 'event_cliffhanger' },
           },
+          execution_blocks: [
+            { block_no: 1, purpose: 'hook', must_show: [], forbidden: [] },
+            { block_no: 2, purpose: 'conflict', must_show: [], forbidden: [] },
+            { block_no: 3, purpose: 'reversal', must_show: [], forbidden: [] },
+            { block_no: 4, purpose: 'climax_tail', must_show: [], forbidden: [] },
+          ],
+          ending_closure: isFinale ? { required: true, required_outcome: ['守住南京', '稳住朝局', '叛党被清或内奸伏法', '建文帝权力稳固'] } : undefined,
           production_elements: { key_characters: [], key_locations: [], key_props: [] },
         });
       } else {
@@ -1211,7 +1230,10 @@ export class EpisodeStoryGenerationService {
 
     const systemMsg = P2_WRITER_SYSTEM_PROMPT + endingGuardBlock;
 
-    const userMsg = `${continuityBlock}本批为可拍短剧单元，请严格按照下方每集的 story_beat_json 节拍规划，为每集生成 storyText。你必须忠实地实现每个节拍（hook_3s、conflict_15s、mid_reversal、climax、tail_hook）中描述的具体事件，不允许只参考不落实。\n\n本批节拍规划：\n${beatsJson.slice(0, 40000)}`;
+    const userMsg = `${continuityBlock}本批为可拍短剧单元，请严格按照下方每集的 story_beat_json 为每集生成 storyText。
+要求：按 execution_blocks 顺序逐块写，每个 block 的 must_show 必须落成具体动作/画面，禁止仅用心理句或总结句替代。
+若某集有 ending_closure（59-61 集），最后一段必须明确写出 required_outcome：守住南京、稳住朝局、叛党/内奸被清、建文帝权力稳固。
+你必须忠实地实现每个节拍与执行块，不允许只参考不落实。\n\n本批节拍规划：\n${beatsJson.slice(0, 40000)}`;
 
     const promptChars = systemMsg.length + userMsg.length;
     const requestedEpisodes = beats.map((b) => b.episode_meta.episode_number).join(',');
@@ -1540,8 +1562,15 @@ ${originalStoryText}
     }
 
     if (diagnosis.needsRewrite && attempts >= AUTO_REWRITE_MAX_RETRIES) {
+      const issueTypes = diagnosis.issues.filter((i) => i.severity === 'high').map((i) => i.type);
       this.logger.warn(
-        `[episode-story][auto-rewrite-loop] ep=${episodeNumber} exhausted ${AUTO_REWRITE_MAX_RETRIES} retries, still has high issues`,
+        `[episode-story][auto-rewrite-loop] ep=${episodeNumber} exhausted ${AUTO_REWRITE_MAX_RETRIES} retries, still has high issues: ${issueTypes.join(',')}`,
+      );
+      this.logger.error(
+        `[episode-story][auto-rewrite-loop] ep=${episodeNumber} quality-rescue hint: ` +
+          `若为 rewrite_goal_violation/ending_closure_missing 多为 beat 设计未约束终局或 writer 未兑现 beat；` +
+          `若为 event_density_low/narration_too_short 多为 writer 未按 execution_blocks must_show 落段或 rewrite 无法补齐结构。` +
+          `issues=${JSON.stringify(diagnosis.issues)}`,
       );
     }
 

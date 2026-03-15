@@ -20,6 +20,11 @@ import type {
 } from './dto/material-sifting.dto';
 
 const SOURCE_EXCERPT_MAX_CHARS = 10000;
+const SOURCE_SEGMENTS_MAX = 20;
+const EPISODE_KEYWORDS_MAX = 20;
+const KEY_NODES_OR_TIMELINES_TOP = 4;
+const ACTIVE_OPPONENTS_MAX = 3;
+const VISUAL_ANCHORS_MAX = 10;
 
 @Injectable()
 export class MaterialSiftingService {
@@ -41,39 +46,73 @@ export class MaterialSiftingService {
     // 2. temporal_context: current_story_phase, current_power_level, current_timeline_events
     const temporalContext = await this.fetchTemporalContext(novelId, episodeNumber);
 
-    // 3. character_context: protagonist_status (characters + outline_content -> immediate_goal), active_opponents
-    const characterContext = await this.fetchCharacterContext(
-      novelId,
-      episodeNumber,
-      globalContext.protagonistName,
-    );
-
-    // 4. plotline_context: active_payoff_lines, required_hook_rhythm
+    // 4. plotline_context
     const plotlineContext = await this.fetchPlotlineContext(novelId, episodeNumber);
 
-    // 5. source_material_context: 初期简化版 — drama_source_text 前 10000 字
-    const sourceMaterialContext = await this.fetchSourceMaterialContext(novelId);
+    const episodeRow = await this.getEpisode(novelId, episodeNumber);
+    const evidenceEpisode: EvidenceEpisode | null = episodeRow
+      ? this.mapEpisode(episodeRow)
+      : null;
 
-    // 兼容用：本集 episode、core、characters、opponents、keyNodes、timelineEvents（从已有查询结果拼）
-    const episode = await this.getEpisode(novelId, episodeNumber);
+    // 5. source_material_context: 本集关键词 -> segments；无命中再 fallback
+    const sourceMaterialContext = await this.fetchSourceMaterialContext(
+      novelId,
+      episodeNumber,
+      episodeRow,
+    );
+
     const coreRows = await this.getCore(novelId);
     const characterRows = await this.getCharacters(novelId);
     const opponentRows = await this.getActiveOpponents(novelId);
     const keyNodeRows = await this.getKeyNodes(novelId);
     const timelineRows = await this.getTimelines(novelId);
 
-    const evidenceEpisode: EvidenceEpisode | null = episode
-      ? this.mapEpisode(episode)
-      : null;
     const core = this.mapCore(coreRows);
     const characters = this.mapCharacters(characterRows);
-    const opponents = this.mapOpponents(opponentRows);
+    const allOpponents = this.mapOpponents(opponentRows);
     const payoffLines = plotlineContext.activePayoffLines;
     const storyPhaseRows = await this.getStoryPhasesForEpisode(novelId, episodeNumber);
     const storyPhases = storyPhaseRows.map((r) => this.mapStoryPhase(r));
     const hookRhythm = plotlineContext.requiredHookRhythm;
-    const keyNodes = this.mapKeyNodes(keyNodeRows);
-    const timelineEvents = this.mapTimelineEvents(timelineRows);
+
+    const allKeyNodes = this.mapKeyNodes(keyNodeRows);
+    const allTimelineEvents = this.mapTimelineEvents(timelineRows);
+    const keyNodes = this.filterKeyNodesByEpisodeRelevance(
+      allKeyNodes,
+      evidenceEpisode,
+      temporalContext.currentStoryPhase,
+    );
+    const timelineEvents = this.filterTimelineEventsByEpisodeRelevance(
+      allTimelineEvents,
+      evidenceEpisode,
+      temporalContext.currentStoryPhase,
+    );
+    const opponents = this.filterOpponentsByEpisodeRelevance(
+      allOpponents,
+      evidenceEpisode,
+      temporalContext.currentStoryPhase,
+    );
+
+    const characterContext = await this.fetchCharacterContext(
+      novelId,
+      episodeNumber,
+      globalContext.protagonistName,
+    );
+    characterContext.activeOpponents = opponents;
+
+    const episodeGoal = this.buildEpisodeGoal(evidenceEpisode, core);
+    const visualAnchors = this.buildVisualAnchors(
+      evidenceEpisode,
+      keyNodes,
+      timelineEvents,
+      hookRhythm,
+    );
+    const forbiddenDirections = this.buildForbiddenDirections(
+      globalContext,
+      episodeNumber,
+      core,
+    );
+    const continuity = this.buildContinuity(evidenceEpisode);
 
     const pack: DramaticEvidencePack = {
       novelId,
@@ -83,6 +122,10 @@ export class MaterialSiftingService {
       characterContext,
       plotlineContext,
       sourceMaterialContext,
+      episodeGoal,
+      visualAnchors,
+      forbiddenDirections,
+      continuity,
       episode: evidenceEpisode,
       core,
       characters,
@@ -97,9 +140,9 @@ export class MaterialSiftingService {
 
     this.logger.log(
       `[material-sifting] built pack novelId=${novelId} ep=${episodeNumber} ` +
-        `globalContext=${!!globalContext.rewriteGoal} temporalPhase=${!!temporalContext.currentStoryPhase} ` +
-        `protagonist=${!!characterContext.protagonistStatus} activeOpponents=${characterContext.activeOpponents.length} ` +
-        `payoffLines=${plotlineContext.activePayoffLines.length} sourceLen=${sourceMaterialContext.excerpt?.length ?? 0}`,
+        `episodeGoal=${!!episodeGoal} visualAnchors=${visualAnchors.length} forbidden=${forbiddenDirections.length} ` +
+        `keyNodes=${keyNodes.length} timelineEvents=${timelineEvents.length} opponents=${opponents.length} ` +
+        `sourceLen=${sourceMaterialContext.excerpt?.length ?? 0}`,
     );
     return pack;
   }
@@ -243,16 +286,35 @@ export class MaterialSiftingService {
     };
   }
 
-  /** 5. source_material_context: 初期简化 — drama_source_text 前 10000 字（表用 novels_id，列用 source_text） */
+  /**
+   * 5. source_material_context: 本集关键词 -> novel_source_segments 匹配；无命中时 fallback drama_source_text 截断。
+   */
   private async fetchSourceMaterialContext(
     novelId: number,
+    episodeNumber: number,
+    episodeRow: Record<string, unknown> | null,
   ): Promise<SourceMaterialContext> {
-    const hasTable = await this.dataSource
+    const keywords = this.extractEpisodeKeywords(episodeRow);
+    const hasSegments = await this.dataSource
+      .query(
+        `SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'novel_source_segments' LIMIT 1`,
+      )
+      .then((r) => Array.isArray(r) && r.length > 0);
+
+    if (hasSegments && keywords.length > 0) {
+      const excerptFromSegments = await this.fetchSourceExcerptByKeywords(
+        novelId,
+        keywords,
+      );
+      if (excerptFromSegments) return { excerpt: excerptFromSegments };
+    }
+
+    const hasDrama = await this.dataSource
       .query(
         `SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'drama_source_text' LIMIT 1`,
       )
       .then((r) => Array.isArray(r) && r.length > 0);
-    if (!hasTable) return { excerpt: undefined };
+    if (!hasDrama) return { excerpt: undefined };
 
     const rows = await this.dataSource.query(
       `SELECT source_text AS content FROM drama_source_text WHERE novels_id = ? ORDER BY id ASC LIMIT 1`,
@@ -266,6 +328,189 @@ export class MaterialSiftingService {
         ? text.slice(0, SOURCE_EXCERPT_MAX_CHARS) + '…'
         : text || undefined;
     return { excerpt };
+  }
+
+  private extractEpisodeKeywords(episodeRow: Record<string, unknown> | null): string[] {
+    if (!episodeRow) return [];
+    const parts: string[] = [
+      episodeRow.outline_content,
+      episodeRow.core_conflict,
+      episodeRow.hooks,
+      episodeRow.cliffhanger,
+    ]
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .map((s) => s.trim());
+    const combined = parts.join(' ');
+    const tokens = combined.split(/[\s，。、；：！？\n]+/).filter((t) => t.length >= 2);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of tokens) {
+      if (seen.has(t) || out.length >= EPISODE_KEYWORDS_MAX) break;
+      seen.add(t);
+      out.push(t);
+    }
+    return out;
+  }
+
+  private async fetchSourceExcerptByKeywords(
+    novelId: number,
+    keywords: string[],
+  ): Promise<string | undefined> {
+    if (keywords.length === 0) return undefined;
+    const conditions = keywords
+      .slice(0, 10)
+      .map(() => `(content_text LIKE ? OR keyword_text LIKE ?)`)
+      .join(' OR ');
+    const params: (number | string)[] = [novelId];
+    keywords.slice(0, 10).forEach((k) => {
+      params.push(`%${k}%`, `%${k}%`);
+    });
+    const rows = await this.dataSource.query(
+      `SELECT content_text, segment_index FROM novel_source_segments
+       WHERE novel_id = ? AND is_active = 1 AND (${conditions})
+       ORDER BY segment_index ASC
+       LIMIT ?`,
+      [...params, SOURCE_SEGMENTS_MAX],
+    );
+    const arr = Array.isArray(rows) ? rows : [];
+    if (arr.length === 0) return undefined;
+    let total = 0;
+    const excerpts: string[] = [];
+    for (const row of arr) {
+      const text = (row as Record<string, unknown>).content_text as string | undefined;
+      if (typeof text !== 'string') continue;
+      if (total + text.length > SOURCE_EXCERPT_MAX_CHARS) {
+        excerpts.push(text.slice(0, SOURCE_EXCERPT_MAX_CHARS - total));
+        break;
+      }
+      excerpts.push(text);
+      total += text.length;
+    }
+    return excerpts.length ? excerpts.join('\n\n') : undefined;
+  }
+
+  private filterKeyNodesByEpisodeRelevance(
+    nodes: EvidenceKeyNode[],
+    episode: EvidenceEpisode | null,
+    currentPhase: EvidenceStoryPhase | null,
+  ): EvidenceKeyNode[] {
+    const needle = this.episodeRelevanceNeedle(episode, currentPhase);
+    if (!needle) return nodes.slice(0, KEY_NODES_OR_TIMELINES_TOP);
+    const scored = nodes.map((n) => {
+      const text = [n.title, n.description, n.category].filter(Boolean).join(' ');
+      const hit = needle.some((w) => text.includes(w));
+      return { node: n, hit };
+    });
+    const withHit = scored.filter((s) => s.hit);
+    if (withHit.length > 0) return withHit.map((s) => s.node).slice(0, KEY_NODES_OR_TIMELINES_TOP);
+    return nodes.slice(0, KEY_NODES_OR_TIMELINES_TOP);
+  }
+
+  private filterTimelineEventsByEpisodeRelevance(
+    events: EvidenceTimelineEvent[],
+    episode: EvidenceEpisode | null,
+    currentPhase: EvidenceStoryPhase | null,
+  ): EvidenceTimelineEvent[] {
+    const needle = this.episodeRelevanceNeedle(episode, currentPhase);
+    if (!needle) return events.slice(0, KEY_NODES_OR_TIMELINES_TOP);
+    const scored = events.map((e) => {
+      const text = [e.timeNode, e.event].filter(Boolean).join(' ');
+      const hit = needle.some((w) => text.includes(w));
+      return { event: e, hit };
+    });
+    const withHit = scored.filter((s) => s.hit);
+    if (withHit.length > 0) return withHit.map((s) => s.event).slice(0, KEY_NODES_OR_TIMELINES_TOP);
+    return events.slice(0, KEY_NODES_OR_TIMELINES_TOP);
+  }
+
+  private episodeRelevanceNeedle(
+    episode: EvidenceEpisode | null,
+    currentPhase: EvidenceStoryPhase | null,
+  ): string[] {
+    const parts: string[] = [
+      episode?.outlineContent,
+      episode?.coreConflict,
+      episode?.hooks,
+      episode?.cliffhanger,
+      currentPhase?.phaseName,
+      currentPhase?.rewritePath,
+    ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+    const combined = parts.join(' ');
+    return combined.split(/[\s，。、；：！？\n]+/).filter((t) => t.length >= 2);
+  }
+
+  private filterOpponentsByEpisodeRelevance(
+    all: EvidenceOpponent[],
+    episode: EvidenceEpisode | null,
+    currentPhase: EvidenceStoryPhase | null,
+  ): EvidenceOpponent[] {
+    const needle = this.episodeRelevanceNeedle(episode, currentPhase);
+    if (needle.length === 0) return all.slice(0, ACTIVE_OPPONENTS_MAX);
+    const scored = all.map((o) => {
+      const text = [o.opponentName, o.levelName, o.detailedDesc, o.threatType].filter(Boolean).join(' ');
+      const hit = needle.some((w) => text.includes(w));
+      return { opponent: o, hit };
+    });
+    const withHit = scored.filter((s) => s.hit);
+    if (withHit.length > 0) return withHit.map((s) => s.opponent).slice(0, ACTIVE_OPPONENTS_MAX);
+    return all.slice(0, ACTIVE_OPPONENTS_MAX);
+  }
+
+  private buildEpisodeGoal(
+    episode: EvidenceEpisode | null,
+    core: EvidenceCore | null,
+  ): string | undefined {
+    const raw = episode?.coreConflict ?? episode?.outlineContent;
+    if (typeof raw === 'string' && raw.trim()) return raw.trim().slice(0, 500);
+    return undefined;
+  }
+
+  private buildVisualAnchors(
+    episode: EvidenceEpisode | null,
+    keyNodes: EvidenceKeyNode[],
+    timelineEvents: EvidenceTimelineEvent[],
+    hookRhythm: EvidenceHookRhythm | null,
+  ): string[] {
+    const out: string[] = [];
+    if (episode?.opening?.trim()) out.push(episode.opening.trim());
+    if (episode?.hooks?.trim()) out.push(episode.hooks.trim());
+    if (episode?.cliffhanger?.trim()) out.push(episode.cliffhanger.trim());
+    if (hookRhythm?.description?.trim()) out.push(hookRhythm.description.trim());
+    if (hookRhythm?.cliffhanger?.trim()) out.push(hookRhythm.cliffhanger.trim());
+    for (const n of keyNodes) {
+      if (n.title?.trim()) out.push(n.title.trim());
+      if (n.description?.trim() && out.length < VISUAL_ANCHORS_MAX) out.push(n.description.trim());
+    }
+    for (const e of timelineEvents) {
+      if (e.event?.trim()) out.push(e.event.trim());
+    }
+    return out.slice(0, VISUAL_ANCHORS_MAX);
+  }
+
+  private buildForbiddenDirections(
+    global: GlobalContext,
+    episodeNumber: number,
+    core: EvidenceCore | null,
+  ): string[] {
+    const list: string[] = [];
+    if (global.rewriteGoal) {
+      list.push(`改写目标禁止违背：${global.rewriteGoal}。禁止出现：朱棣攻破南京、建文朝覆灭、建文帝失败、历史未被改写、燕军进京、朱棣登基。`);
+    }
+    if (global.coreConstraint) list.push(`核心约束：${global.coreConstraint}`);
+    if (episodeNumber >= 59 && episodeNumber <= 61) {
+      list.push('终局集(59-61)禁止：结尾不得使用普通大开环尾钩（如「还有更大阴谋」「下一场风暴」「真正的考验才刚开始」）；必须明确收束：守住南京、稳住朝局、叛党/内奸被清、建文帝权力稳固。');
+    }
+    return list;
+  }
+
+  private buildContinuity(episode: EvidenceEpisode | null): {
+    continuityIn?: string;
+    continuityOutHint?: string;
+  } {
+    return {
+      continuityIn: episode?.opening?.trim() || undefined,
+      continuityOutHint: episode?.cliffhanger?.trim() || episode?.hooks?.trim() || undefined,
+    };
   }
 
   private async getEpisode(
