@@ -109,9 +109,19 @@ export interface StoryCheckReportEpisodeIssue {
   severity: 'low' | 'medium' | 'high'
 }
 
+/** 单集强冲突审计结果（check 返回） */
+export interface EpisodeStrongConflictAudit {
+  hasAntagonistAction: boolean
+  hasProtagonistCounteraction: boolean
+  hasReversal: boolean
+  hasEndHook: boolean
+  conflictIntensityLow: boolean
+}
+
 export interface StoryCheckReportEpisodeItem {
   episodeNumber: number
   issues: StoryCheckReportEpisodeIssue[]
+  strongConflictAudit?: EpisodeStrongConflictAudit
 }
 
 export interface StoryCheckReportSuggestion {

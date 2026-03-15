@@ -4,7 +4,10 @@
       "Bash(pnpm install:*)",
       "Bash(mysql:*)",
       "Bash(dir:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(npx tsc:*)",
+      "Bash(pnpm exec tsc:*)",
+      "Bash(pnpm --filter api build:*)"
     ]
   }
 }

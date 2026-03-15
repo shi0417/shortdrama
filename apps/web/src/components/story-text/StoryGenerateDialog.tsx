@@ -379,6 +379,15 @@ export default function StoryGenerateDialog({
                   {checkReport.episodeIssues.slice(0, 20).map((item, idx) => (
                     <div key={`${item.episodeNumber}-${idx}`} style={{ marginBottom: 6 }}>
                       <div style={{ fontWeight: 500, marginBottom: 2 }}>第{item.episodeNumber}集</div>
+                      {item.strongConflictAudit ? (
+                        <div style={{ paddingLeft: 8, marginBottom: 4, fontSize: 11, color: '#595959', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          <span>对手动作：{item.strongConflictAudit.hasAntagonistAction ? '有' : '无'}</span>
+                          <span>主角反制：{item.strongConflictAudit.hasProtagonistCounteraction ? '有' : '无'}</span>
+                          <span>转折：{item.strongConflictAudit.hasReversal ? '有' : '无'}</span>
+                          <span>结尾钩子：{item.strongConflictAudit.hasEndHook ? '有' : '无'}</span>
+                          <span>冲突强度不足：{item.strongConflictAudit.conflictIntensityLow ? '是' : '否'}</span>
+                        </div>
+                      ) : null}
                       {item.issues.map((i, j) => (
                         <div key={`${j}`} style={{ paddingLeft: 8, marginBottom: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <span style={{ color: i.severity === 'high' ? '#cf1322' : i.severity === 'medium' ? '#d46b08' : '#666' }}>

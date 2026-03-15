@@ -191,9 +191,20 @@ export interface StoryCheckReportEpisodeIssue {
   severity: 'low' | 'medium' | 'high';
 }
 
+/** 单集强冲突审计结果（check 返回，供未保存草稿也能审） */
+export interface EpisodeStrongConflictAudit {
+  hasAntagonistAction: boolean;
+  hasProtagonistCounteraction: boolean;
+  hasReversal: boolean;
+  hasEndHook: boolean;
+  conflictIntensityLow: boolean;
+}
+
 export interface StoryCheckReportEpisodeItem {
   episodeNumber: number;
   issues: StoryCheckReportEpisodeIssue[];
+  /** 强冲突审计：该集是否具备对手动作/主角反制/转折/尾钩 */
+  strongConflictAudit?: EpisodeStrongConflictAudit;
 }
 
 export interface StoryCheckReportSuggestion {
